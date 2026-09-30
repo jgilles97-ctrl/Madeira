@@ -33,6 +33,9 @@ jobs:
       - name: Validate required inputs
         run: ./build/check-house-party-inputs.sh
 
+      - name: Fetch FreeType source
+        run: git clone --depth 1 --branch VER-2-13-3 https://github.com/freetype/freetype.git research/freetype
+
       - name: Build native dependencies
         run: |
           set -euo pipefail
