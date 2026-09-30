@@ -25,7 +25,7 @@ jobs:
           fi
           openssl enc -d -aes-256-cbc -pbkdf2 \
             -pass "env:VC_RUNTIME_ARCHIVE_KEY" \
-            -in ci_inputs/vcruntime.zip.enc \
+            -in .github/vcruntime.zip.enc \
             -out /tmp/vcruntime.zip
           unzip -q -o /tmp/vcruntime.zip -d app/Madeira/x86_64-vcruntime
           rm -f /tmp/vcruntime.zip
