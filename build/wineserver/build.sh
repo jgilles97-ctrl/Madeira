@@ -12,16 +12,6 @@ SHIMS_DIR="$REPO_ROOT/build/ntdll-unix/shims"
 OBJ_DIR="$BUILD_DIR/obj"
 mkdir -p "$OBJ_DIR"
 
-# Copy the base library if we don't have one yet
-if [ ! -f "$OBJ_DIR/libwineserver.a" ]; then
-    if [ -f "$APP_LIB" ]; then
-        cp "$APP_LIB" "$OBJ_DIR/libwineserver.a"
-    else
-        echo "ERROR: No base libwineserver.a found"
-        exit 1
-    fi
-fi
-
 CC_FLAGS=(
     -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 -O2
     -I"$WINE_SRC/include" -I"$WINE_SRC/include/wine"
@@ -56,6 +46,24 @@ compile_one() {
         return 1
     fi
 }
+
+# Build a base archive from iOS objects when requested. The historical fallback
+# archive may contain macOS objects and must never be linked into an iOS app.
+if [ "${BUILD_WINESERVER_BASE_IOS:-0}" = "1" ]; then
+    echo "=== Building all base wineserver sources for iOS ==="
+    for src in "$WINE_SRC"/server/*.c; do
+        name="base_$(basename "$src" .c)"
+        compile_one "$src" "$name"
+    done
+    ar rcs "$OBJ_DIR/libwineserver.a" "$OBJ_DIR"/base_*.o
+elif [ ! -f "$OBJ_DIR/libwineserver.a" ]; then
+    if [ -f "$APP_LIB" ]; then
+        cp "$APP_LIB" "$OBJ_DIR/libwineserver.a"
+    else
+        echo "ERROR: No base libwineserver.a found"
+        exit 1
+    fi
+fi
 
 # Patched files: name:source_file:replaces_in_archive
 PATCHED_FILES=(
@@ -177,7 +185,9 @@ echo "=== Renaming colliding symbols in every .o (objcopy sweep) ==="
 # we know collide with win32u-unix, repackage. Affects definitions AND
 # references uniformly, so cross-file calls inside wineserver still
 # resolve. Externals (win32u, etc.) only see the ws_-prefixed names.
-OBJCOPY=$(command -v llvm-objcopy || echo /opt/homebrew/opt/llvm/bin/llvm-objcopy)
+OBJCOPY=$(command -v llvm-objcopy || true)
+[ -x "$OBJCOPY" ] || OBJCOPY="$REPO_ROOT/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/llvm-objcopy"
+[ -x "$OBJCOPY" ] || OBJCOPY=/opt/homebrew/opt/llvm/bin/llvm-objcopy
 [ -x "$OBJCOPY" ] || OBJCOPY=/opt/homebrew/Cellar/llvm/22.1.0/bin/llvm-objcopy
 COLLISIONS=(
     alloc_user_handle free_user_handle get_virtual_screen_rect

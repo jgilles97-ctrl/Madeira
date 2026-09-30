@@ -1,4 +1,5 @@
 import UIKit
+import Darwin
 
 /// Helper to enable JIT via StikDebug/StikJIT URL scheme.
 /// Opens StikDebug with an embedded script, polls for CS_DEBUGGED,
@@ -21,10 +22,16 @@ enum StikJITHelper {
         return scriptBase64
     }
 
-    /// Check if StikDebug or StikJIT is available by trying to open their URL.
+    /// Check for the current StikDebug scheme, retaining the legacy scheme as
+    /// a compatibility fallback for older companion builds.
     static var isAvailable: Bool {
-        guard let url = URL(string: "stikjit://enable-jit") else { return false }
-        return UIApplication.shared.canOpenURL(url)
+        for scheme in ["stikdebug", "stikjit"] {
+            if let url = URL(string: "\(scheme)://enable-jit"),
+               UIApplication.shared.canOpenURL(url) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Open StikDebug with our JIT script embedded in the URL.
@@ -34,7 +41,13 @@ enum StikJITHelper {
 
         // Build the URL with script data
         let scriptData = resolvedScriptBase64.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let urlString = "stikjit://enable-jit?bundle-id=\(bundleId)&script-data=\(scriptData)"
+        let pid = getpid()
+        // iOS 26+ StikDebug requires the current process ID. Keep the custom
+        // script in the request because Madeira uses the breakpoint protocol;
+        // the companion decides whether TXM/SPTM preparation is necessary.
+        let scheme = UIApplication.shared.canOpenURL(URL(string: "stikdebug://enable-jit")!)
+            ? "stikdebug" : "stikjit"
+        let urlString = "\(scheme)://enable-jit?bundle-id=\(bundleId)&pid=\(pid)&script-data=\(scriptData)"
 
         guard let url = URL(string: urlString) else {
             LogStore.shared.log("Failed to build StikJIT URL", level: .error)

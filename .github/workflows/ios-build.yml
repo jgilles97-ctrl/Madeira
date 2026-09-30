@@ -1,0 +1,60 @@
+name: Madeira iOS build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, joey-house-party]
+
+jobs:
+  unsigned-build:
+    runs-on: macos-14
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install private VC runtime input
+        env:
+          VC_RUNTIME_ZIP_B64: ${{ secrets.VC_RUNTIME_ZIP_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VC_RUNTIME_ZIP_B64:-}" ]]; then
+            echo "Missing required secret VC_RUNTIME_ZIP_B64 (base64 ZIP of the official VC runtime DLLs)." >&2
+            exit 2
+          fi
+          printf '%s' "$VC_RUNTIME_ZIP_B64" | base64 --decode > /tmp/vcruntime.zip
+          unzip -q -o /tmp/vcruntime.zip -d app/Madeira/x86_64-vcruntime
+          rm -f /tmp/vcruntime.zip
+
+      - name: Validate required inputs
+        run: ./build/check-house-party-inputs.sh
+
+      - name: Build native dependencies
+        run: |
+          set -euo pipefail
+          bash build/gnutls-ios/build.sh
+          bash build/freetype-ios/build.sh
+          bash build/ntdll-unix/build.sh
+          BUILD_WINESERVER_BASE_IOS=1 bash build/wineserver/build.sh
+          bash build/win32u-unix/build.sh
+          bash build/dxmt-ios/build.sh
+
+      - name: Build unsigned iPad app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project app/Madeira.xcodeproj \
+            -scheme Madeira \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Upload unsigned app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Madeira-unsigned-app
+          path: ${{ runner.temp }}/DerivedData/Build/Products/Release-iphoneos/Madeira.app

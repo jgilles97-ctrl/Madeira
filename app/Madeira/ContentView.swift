@@ -3,6 +3,7 @@ import UIKit
 import QuartzCore
 import Metal
 import os.log
+import GameController
 
 // 2026-07-03 window-hosted Metal layer.
 //
@@ -79,6 +80,109 @@ final class MetalHostView: UIView {
 }
 
 // SwiftUI-hosted placeholder: geometry + touch input only.
+
+// JOEY_HOUSE_PARTY_PHYSICAL_INPUT_V1
+final class JoeyHousePartyPhysicalInput {
+    static let shared = JoeyHousePartyPhysicalInput()
+    private var started = false
+    private let move: UInt32 = 0x0001
+    private let ldown: UInt32 = 0x0002
+    private let lup: UInt32 = 0x0004
+    private let rdown: UInt32 = 0x0008
+    private let rup: UInt32 = 0x0010
+
+    func start() {
+        if !started {
+            started = true
+            NotificationCenter.default.addObserver(
+                forName: .GCKeyboardDidConnect, object: nil, queue: .main
+            ) { [weak self] _ in self?.attachKeyboard() }
+            NotificationCenter.default.addObserver(
+                forName: .GCMouseDidBecomeCurrent, object: nil, queue: .main
+            ) { [weak self] _ in self?.attachMouse() }
+        }
+        attachKeyboard()
+        attachMouse()
+    }
+
+    private func attachKeyboard() {
+        guard let input = GCKeyboard.coalesced?.keyboardInput else { return }
+        input.keyChangedHandler = { _, _, code, pressed in
+            guard let vk = Self.vk(code) else { return }
+            winios_post_key(vk, pressed ? 1 : 0)
+        }
+    }
+
+    private func attachMouse() {
+        guard let input = GCMouse.current?.mouseInput else { return }
+        input.mouseMovedHandler = { _, dx, dy in
+            let x = Int32(max(-30000, min(30000, dx)))
+            let y = Int32(max(-30000, min(30000, -dy)))
+            if x != 0 || y != 0 { winios_pointer(x, y, self.move, 0) }
+        }
+        input.leftButton.pressedChangedHandler = { _, _, pressed in
+            winios_pointer(0, 0, pressed ? self.ldown : self.lup, 0)
+        }
+        input.rightButton?.pressedChangedHandler = { _, _, pressed in
+            winios_pointer(0, 0, pressed ? self.rdown : self.rup, 0)
+        }
+    }
+
+    private static func vk(_ code: GCKeyCode) -> Int32? {
+        switch code {
+        case .keyA: return 0x41
+        case .keyB: return 0x42
+        case .keyC: return 0x43
+        case .keyD: return 0x44
+        case .keyE: return 0x45
+        case .keyF: return 0x46
+        case .keyG: return 0x47
+        case .keyH: return 0x48
+        case .keyI: return 0x49
+        case .keyJ: return 0x4A
+        case .keyK: return 0x4B
+        case .keyL: return 0x4C
+        case .keyM: return 0x4D
+        case .keyN: return 0x4E
+        case .keyO: return 0x4F
+        case .keyP: return 0x50
+        case .keyQ: return 0x51
+        case .keyR: return 0x52
+        case .keyS: return 0x53
+        case .keyT: return 0x54
+        case .keyU: return 0x55
+        case .keyV: return 0x56
+        case .keyW: return 0x57
+        case .keyX: return 0x58
+        case .keyY: return 0x59
+        case .keyZ: return 0x5A
+        case .zero: return 0x30
+        case .one: return 0x31
+        case .two: return 0x32
+        case .three: return 0x33
+        case .four: return 0x34
+        case .five: return 0x35
+        case .six: return 0x36
+        case .seven: return 0x37
+        case .eight: return 0x38
+        case .nine: return 0x39
+        case .tab: return 0x09
+        case .spacebar: return 0x20
+        case .escape: return 0x1B
+        case .returnOrEnter: return 0x0D
+        case .deleteOrBackspace: return 0x08
+        case .leftShift, .rightShift: return 0x10
+        case .leftControl, .rightControl: return 0x11
+        case .leftAlt, .rightAlt: return 0x12
+        case .leftArrow: return 0x25
+        case .upArrow: return 0x26
+        case .rightArrow: return 0x27
+        case .downArrow: return 0x28
+        default: return nil
+        }
+    }
+}
+
 final class MetalBackedView: UIView {
     private static var layerRegistered = false
 
@@ -134,6 +238,7 @@ final class MetalBackedView: UIView {
         super.didMoveToWindow()
         guard let w = window else { return }   // detach: leave the host be
         MetalBackedView.keyboardTarget = self  // keyboard button targets the live view
+        JoeyHousePartyPhysicalInput.shared.start()
         // SwiftUI ancestors attach gesture recognizers that can delay or
         // cancel raw touch delivery (double-tap timing is exactly what
         // they punish). Defuse them for our subtree.
@@ -848,6 +953,24 @@ struct ContentView: View {
     @StateObject private var logStore = LogStore.shared
     @State private var jitStatus: JITStatus = .unknown
     @State private var entitlements: EntitlementStatus?
+
+    /// Device smoke-test hook. It is opt-in via a launch argument so normal
+    /// users always retain the launch screen and do not start Wine by accident.
+    private func launchHouseParty() {
+        setenv("MADEIRA_EXE", "C:\\Program Files\\House Party\\HouseParty.exe", 1)
+        var args = "-force-d3d11 -screen-fullscreen 0 -screen-width 1024 -screen-height 768"
+        if let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+           let txt = try? String(contentsOf: d.appendingPathComponent("house-party-args.txt"), encoding: .utf8) {
+            let v = txt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { args = v }
+        }
+        setenv("MADEIRA_ARGS", args, 1)
+        setenv("MADEIRA_DESKTOP", "1", 1)
+        setenv("MADEIRA_SCREEN_W", "1024", 1)
+        setenv("MADEIRA_SCREEN_H", "768", 1)
+        logStore.log("House Party: args = \(args)")
+        runWineFullSequence()
+    }
     @State private var debuggerAttached = isDebuggerAttached()
     @ObservedObject private var input = InputSettings.shared
     @State private var pointerPanel = false
@@ -890,6 +1013,11 @@ struct ContentView: View {
                 jit_install_trap_handler()
                 entitlements = EntitlementStatus.check()
                 logEntitlementStatus()
+                if ProcessInfo.processInfo.arguments.contains("-house-party-autostart") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        launchHouseParty()
+                    }
+                }
             }
         }
     }
@@ -1465,6 +1593,13 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
 
+                // JOEY_HOUSE_PARTY_QUICK_LAUNCH_V2
+                Button("House Party") {
+                    launchHouseParty()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+
                 Button("Thumper (standalone)") {
                     // Game lives at Documents/wine/drive_c/Program Files/Thumper/
                     // (push via scripts/deploy-thumper.sh during development;
@@ -1719,6 +1854,11 @@ struct ContentView: View {
     }
 
     private func enableJITViaStikDebug() {
+        guard StikJITHelper.isAvailable else {
+            jitStatus = .unavailable
+            logStore.log("StikJIT is not installed. On iOS 26/27, use the bundled desktop JITserver: connect USB, select Madeira's live PID, choose madeira-jit.js, then run Enable JIT via Script.", level: .error)
+            return
+        }
         jitStatus = .testing
         logStore.log("Requesting JIT via StikDebug URL scheme...")
 
@@ -1728,7 +1868,7 @@ struct ContentView: View {
                 logStore.log("JIT enabled! Debugger attached.", level: .success)
             } else {
                 jitStatus = .unavailable
-                logStore.log("Failed to enable JIT via StikDebug", level: .error)
+                logStore.log("Failed to enable JIT via StikDebug. Confirm the desktop JITserver/StikDebug session is attached to this live Madeira process, then retry.", level: .error)
             }
         }
     }

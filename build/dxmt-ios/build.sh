@@ -11,6 +11,14 @@ DXMT_SRC="$REPO_ROOT/research/dxmt/src"
 DXMT_ROOT="$REPO_ROOT/research/dxmt"
 LLVM_SRC="$REPO_ROOT/toolchains/llvm-project/llvm"
 LLVM_BUILD="$REPO_ROOT/toolchains/llvm-ios-build"
+LLVM_IOS_LIB_DIR="${LLVM_IOS_LIB_DIR:-$REPO_ROOT/toolchains/llvm-ios-build/lib}"
+if [ ! -f "$LLVM_BUILD/include/llvm/IR/Constants.h" ] && [ -f "$(brew --prefix llvm@15 2>/dev/null)/include/llvm/IR/Constants.h" ]; then
+    LLVM_BUILD="$(brew --prefix llvm@15)"
+    LLVM_SRC="$LLVM_BUILD"
+elif [ ! -f "$LLVM_BUILD/include/llvm/IR/Constants.h" ] && [ -f "$(brew --prefix llvm 2>/dev/null)/include/llvm/IR/Constants.h" ]; then
+    LLVM_BUILD="$(brew --prefix llvm)"
+    LLVM_SRC="$LLVM_BUILD"
+fi
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 OUT_LIB="$BUILD_DIR/libdxmt_unix.a"
@@ -93,3 +101,17 @@ echo ""
 echo "=== Archiving libdxmt_unix.a ==="
 xcrun -sdk iphoneos ar rcs "$OUT_LIB" "$OBJ_DIR"/*.o
 echo "Built: $OUT_LIB ($(wc -c < "$OUT_LIB" | tr -d ' ') bytes)"
+
+# Keep the final archive reproducible. DXMT's unix objects reference LLVM's
+# C++ implementation, so the app must link one archive containing both sets
+# of arm64 iOS objects. The LLVM build is intentionally external because it
+# is large and is not checked into the repository.
+if compgen -G "$LLVM_IOS_LIB_DIR/libLLVM*.a" > /dev/null; then
+    COMBINED_LIB="$REPO_ROOT/app/Madeira/libdxmt_combined.a"
+    echo "=== Combining DXMT with LLVM iOS archives ==="
+    xcrun -sdk iphoneos libtool -static -o "$COMBINED_LIB" \
+        "$OUT_LIB" "$LLVM_IOS_LIB_DIR"/libLLVM*.a
+    echo "Built: $COMBINED_LIB ($(wc -c < "$COMBINED_LIB" | tr -d ' ') bytes)"
+else
+    echo "LLVM iOS archives not found at $LLVM_IOS_LIB_DIR; leaving libdxmt_unix.a for manual composition."
+fi
