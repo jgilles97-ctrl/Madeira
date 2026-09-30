@@ -16,14 +16,17 @@ jobs:
 
       - name: Install private VC runtime input
         env:
-          VC_RUNTIME_ZIP_B64: ${{ secrets.VC_RUNTIME_ZIP_B64 }}
+          VC_RUNTIME_ARCHIVE_KEY: ${{ secrets.VC_RUNTIME_ARCHIVE_KEY }}
         run: |
           set -euo pipefail
-          if [[ -z "${VC_RUNTIME_ZIP_B64:-}" ]]; then
-            echo "Missing required secret VC_RUNTIME_ZIP_B64 (base64 ZIP of the official VC runtime DLLs)." >&2
+          if [[ -z "${VC_RUNTIME_ARCHIVE_KEY:-}" ]]; then
+            echo "Missing required secret VC_RUNTIME_ARCHIVE_KEY." >&2
             exit 2
           fi
-          printf '%s' "$VC_RUNTIME_ZIP_B64" | base64 --decode > /tmp/vcruntime.zip
+          openssl enc -d -aes-256-cbc -pbkdf2 \
+            -pass "env:VC_RUNTIME_ARCHIVE_KEY" \
+            -in ci_inputs/vcruntime.zip.enc \
+            -out /tmp/vcruntime.zip
           unzip -q -o /tmp/vcruntime.zip -d app/Madeira/x86_64-vcruntime
           rm -f /tmp/vcruntime.zip
 
