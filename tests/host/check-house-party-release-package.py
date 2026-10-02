@@ -28,7 +28,7 @@ for forbidden in [
     "House-Party-AnkerGames.zip",
     "$HOME/Games/HouseParty",
     "HouseParty.exe",
-    "rsync -a "$SOURCE",
+    'rsync -a "$SOURCE',
 ]:
     assert forbidden not in text, forbidden
 
