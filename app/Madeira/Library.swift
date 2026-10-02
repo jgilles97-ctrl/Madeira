@@ -228,6 +228,9 @@ struct LibraryEntry: Codable, Identifiable {
     /// library files decode; the fork's files carry the same keys.
     var fastSync: Bool?
     var semaphoreFastPath: Bool?
+    /// Per-game opt-in for Madeira's 64-bit winegstreamer unix bridge.
+    /// nil inherits madeira.cfg; false explicitly keeps the compatibility stub.
+    var media64Bit: Bool?
 
     var displayMode: DisplayMode { display.flatMap(DisplayMode.init(rawValue:)) ?? .fit }
 
@@ -293,6 +296,11 @@ struct LibraryEntry: Codable, Identifiable {
         // madeira.cfg setting), as before these choices existed.
         if let cpuCount, (1..<64).contains(cpuCount) { setenv("MADEIRA_CPU_COUNT", String(cpuCount), 1) }
         if let anisotropyLimit, [1, 2, 4, 8].contains(anisotropyLimit) { setenv("DXMT_D9_ANISO_LIMIT", String(anisotropyLimit), 1) }
+        // The native winegstreamer unix side is deliberately opt-in for 64-bit
+        // programs. A per-game choice wins; nil inherits madeira.cfg (not the
+        // process environment, which could contain the previous game's override).
+        let configuredMedia64 = MadeiraConfig.get("env.MADEIRA_WG_64BIT").map { $0 != "0" } ?? false
+        setenv("MADEIRA_WG_64BIT", (media64Bit ?? configuredMedia64) ? "1" : "0", 1)
         // Fastsync's per-game switches, only when Settings chose Fastsync; with Madsync
         // (the default) or Wine's standard sync nothing is exported here.
         if SyncEngine.current == .fastsync {
@@ -2311,6 +2319,12 @@ struct LibraryDetail: View {
                         Text("Application default").tag(0)
                         ForEach([1, 2, 4, 8], id: \.self) { Text("Up to \($0)×").tag($0) }
                     }
+                    if entry.bits == 64 {
+                        Toggle("64-bit media bridge (experimental)",
+                               isOn: Binding(get: {
+                                   entry.media64Bit ?? MadeiraConfig.bool("env.MADEIRA_WG_64BIT", default: false)
+                               }, set: { entry.media64Bit = $0 }))
+                    }
                     // Fastsync-only switches: shown for every game, usable only while
                     // Settings › Sync engine is Fastsync.
                     Group {
@@ -2328,7 +2342,7 @@ struct LibraryDetail: View {
                         TextField("Launch arguments", text: $entry.arguments, axis: .vertical).autocorrectionDisabled().textInputAutocapitalization(.never)
                     }
                 } header: { Text("Compatibility & performance") } footer: {
-                    Text("Reduced-precision x87 can make older games faster at some cost in accuracy; it is off by default. With Fastsync, fast synchronization (on by default) handles events without a server round trip, and fast semaphore waits (off by default) does the same for semaphores. Settings apply to the next launch; a precision change may still require restarting Madeira.")
+                    Text("Reduced-precision x87 can make older games faster at some cost in accuracy; it is off by default. The 64-bit media bridge lets compatible x64 games use Madeira's native FFmpeg/VideoToolbox/AudioToolbox path and remains off unless enabled here or in madeira.cfg. With Fastsync, fast synchronization (on by default) handles events without a server round trip, and fast semaphore waits (off by default) does the same for semaphores. Settings apply to the next launch; a precision change may still require restarting Madeira.")
                 }
                 Section("On screen") {
                     Toggle("Performance overlay", isOn: $entry.performance)
