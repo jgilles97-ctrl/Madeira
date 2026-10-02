@@ -15,6 +15,7 @@ required = [
     "tools/house-party/mac-crossover-smoke.sh",
     "compatibility-manifest.json",
     "gptk4-environment.txt",
+    "reconstruction-feasibility.json",
     "cycle-summary.json",
     "House-Party-AnkerGames.zip",
     "source_policy",
