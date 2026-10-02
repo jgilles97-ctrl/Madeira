@@ -32,8 +32,10 @@ manifest reconfirms IL2CPP and the translated runtime lanes have been exhausted.
 Target classification: Windows x86-64 executable running through a compatibility/
 translation stack. This is **not** a native Apple build.
 
-Current-cycle verification: no fresh House Party main-menu/gameplay result has been
-produced from this branch yet. Do not inherit an old "works" label without a new log.
+Reconciled historical verification: CrossOver 26.3 was present and launcher/bottle
+routing was repaired, but the attempt stopped at a sandbox Unix-socket permission
+blocker before a verified House Party boot. No prior Mac report proves main menu or
+gameplay. This cycle has not produced a fresh runtime result either.
 
 Next measurement is a clean, repeatable DX11 matrix on the Mac, preserving one
 known-good prefix per backend. DXMT and D3DMetal should be compared rather than
@@ -46,9 +48,11 @@ with ARM64EC Wine and DXMT inside an iOS app. This is local execution, but it is
 **not** a true native House Party iPad build.
 
 Current upstream base now includes the October 2 launch/address-space and image
-mapping fixes. The historical project evidence proved app/debugger/JIT plumbing,
-not House Party gameplay. The highest House Party milestone remains below
-"reaches menu" until a current build proves otherwise.
+mapping fixes. Historical work reached build/install/JIT/debugger plumbing and
+separately hit repeated CoreDevice screenshot transport failures; none of that
+proved House Party launch, rendering, menu, gameplay or save/load on the physical
+M4 iPad. The highest House Party runtime milestone therefore remains below
+"launches" until a current device run proves otherwise.
 
 Physical-device work is intentionally queued while the iPad is in active use.
 That is an execution constraint, not evidence of a runtime failure.
@@ -98,3 +102,11 @@ gameplay milestone.
   playable guest configuration is Debug and Release has crashed guest execution.
 - Repeating the same CoreDevice screenshot transport loop without a new hypothesis.
 - Calling Madeira execution "native House Party on iPad."
+
+
+## Status-report reconciliation
+
+Older percentage and calendar estimates described pipeline readiness, not verified
+gameplay. They are superseded by the milestone vocabulary above. Do not derive a
+new completion percentage from staged files, CI jobs, JIT attachment, install
+success or capture plumbing.
