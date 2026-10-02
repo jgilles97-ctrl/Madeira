@@ -5,7 +5,7 @@ set -euo pipefail
 
 SOURCE=""; RESULTS=""; SECONDS=45; BACKEND="all"; PREFIX="HouseParty-Port"
 usage() {
-  echo "usage: $0 --source DIR [--results DIR] [--seconds N] [--backend dxmt|d3dmetal|wined3d|all] [--bottle-prefix NAME]"
+  echo "usage: $0 --source DIR [--results DIR] [--seconds N] [--backend dxmt|d3dmetal|dxvk|wined3d|all] [--bottle-prefix NAME]"
 }
 while (($#)); do
   case "$1" in
@@ -87,6 +87,7 @@ run_backend() {
   case "$backend" in
     dxmt) suffix="DXMT";;
     d3dmetal) suffix="D3DMetal";;
+    dxvk) suffix="DXVK";;
     wined3d) suffix="Wine";;
     *) return 2;;
   esac
@@ -97,7 +98,7 @@ run_backend() {
   set_env_key "$conf" "CX_GRAPHICS_BACKEND" "$backend"
   set_env_key "$conf" "WINEMSYNC" "1"
   set_env_key "$conf" "WINED3DMETAL" "$([[ "$backend" == d3dmetal ]] && echo 1 || echo 0)"
-  set_env_key "$conf" "WINEDXVK" "0"
+  set_env_key "$conf" "WINEDXVK" "$([[ "$backend" == dxvk ]] && echo 1 || echo 0)"
   cp "$conf" "$RESULTS/${backend}-cxbottle.test.conf"
 
   stop_bottle "$dir"; start="$(date +%s)"
@@ -141,15 +142,15 @@ PY
 }
 
 case "$BACKEND" in
-  all) for b in dxmt d3dmetal wined3d; do run_backend "$b"; done;;
-  dxmt|d3dmetal|wined3d) run_backend "$BACKEND";;
+  all) for b in dxmt d3dmetal dxvk wined3d; do run_backend "$b"; done;;
+  dxmt|d3dmetal|dxvk|wined3d) run_backend "$BACKEND";;
   *) echo "invalid backend: $BACKEND" >&2; exit 2;;
 esac
 
 python3 - "$RESULTS" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1]); rows=[]
-for n in ("dxmt","d3dmetal","wined3d"):
+for n in ("dxmt","d3dmetal","dxvk","wined3d"):
     p=root/f"{n}.json"
     if p.exists(): rows.append(json.loads(p.read_text()))
 (root/"matrix.json").write_text(json.dumps({"runs":rows},indent=2)+"\n")
