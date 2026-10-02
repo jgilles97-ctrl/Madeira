@@ -1,0 +1,55 @@
+name: House Party host checks
+
+on:
+  push:
+    branches: [joey-house-party-current]
+    paths:
+      - "tools/house-party/**"
+      - "tests/host/check-house-party-*.py"
+      - "build/wine-pe/build-winegstreamer.sh"
+      - "docs/house-party/**"
+      - "docs/MEDIA.md"
+      - ".porting/**"
+      - ".github/workflows/house-party-host-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-fixture-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python syntax
+        run: python3 -m py_compile tools/house-party/fingerprint.py tests/host/check-house-party-fingerprint.py tests/host/check-house-party-media.py
+
+      - name: Read-only fingerprint fixture
+        run: python3 tests/host/check-house-party-fingerprint.py
+
+      - name: 64-bit media packaging guard
+        run: python3 tests/host/check-house-party-media.py
+
+      - name: Shell syntax
+        run: |
+          bash -n tools/house-party/check-gptk4.sh
+          bash -n build/wine-pe/build-winegstreamer.sh
+
+      - name: Acceleration register schema
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("docs/house-party/ACCELERATION_REGISTER.json")
+          d = json.loads(p.read_text())
+          assert d["schema_version"] == 1
+          assert d["items"]
+          required = {"id","idea","source","date_discovered","expected_time_saved",
+                      "dependency_unlocked","implementation_cost","risk","status",
+                      "experiment_performed","measured_result"}
+          for item in d["items"]:
+              missing = required - item.keys()
+              assert not missing, (item.get("id"), sorted(missing))
+          print("PASS: acceleration register", len(d["items"]), "items")
+          PY
