@@ -19,8 +19,9 @@ This port supplies that unix side in `libntdll_unix.a`, bound by name in
 process gets the generic stub table, which is what every module without a
 unix side gets and what `winegstreamer` got before this code existed, so the
 64-bit engine behaves exactly as it did. `MADEIRA_WG_64BIT=1` opts 64-bit
-processes in (they also need an arm64ec `winegstreamer.dll`, which is not
-shipped).
+processes in. The ARM64EC PE half can be built and packaged with
+`build/wine-pe/build-winegstreamer.sh`; it remains opt-in so adding the module
+does not change existing 64-bit games until that switch is enabled.
 
 ## Pieces
 
@@ -39,7 +40,10 @@ list and its licence.
 The PE half of winegstreamer is upstream's and unchanged. Wine's configure
 disables the module when GStreamer is missing, so a PE build tree has to be
 configured with `--enable-winegstreamer` (`build/wine-pe/build-ntdll.sh` does
-this for the arm64ec tree) and only the PE target is built. A 32-bit
+this for the arm64ec tree) and only the PE target is built.
+`build/wine-pe/build-winegstreamer.sh` builds exactly that target and copies it
+to `app/Madeira/arm64ec-windows/winegstreamer.dll`, which the app already
+packages with the ARM64EC DLL farm. A 32-bit
 (i386) build tree needs the same flag and must not skip `winegstreamer.dll`;
 the 32-bit processes that use this unix side get their `winegstreamer.dll`
 and `wmadmod.dll` from that tree.
