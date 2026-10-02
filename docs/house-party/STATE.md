@@ -14,6 +14,19 @@ separates build/install/debug/capture evidence from actual game-runtime evidence
 - Historical branch \`joey-house-party\` is preserved for provenance.
 - Active integration branch: \`joey-house-party-current\`, created from Madeira v0.1.1-era current main.
 
+## Reconciled owned-input paths
+
+Historical project evidence records the owned archive at:
+
+- `/Users/josephgilles/Downloads/House-Party-AnkerGames.zip`
+- a copied input at `~/.joey-local/projects/house-party-ipad/incoming/House-Party-AnkerGames.zip`
+
+Prior automation also reported a derived/extracted working tree at
+`~/Games/HouseParty` with `~/Games/HouseParty/automation.log`. Those are
+historical paths, not proof they still exist; `tools/house-party/run-local-cycle.sh`
+checks them at runtime and otherwise falls back to the owned archive, extracting only
+into derived Cenluma staging.
+
 ## Reconciled architecture
 
 Historical owned-build inspection says House Party is a Windows x86-64 Unity IL2CPP
@@ -119,6 +132,17 @@ success or capture plumbing.
 
 The open-source ARM64EC `winegstreamer.dll` PE half now compiles on a macOS CI
 host and passes final-image verification: the hybrid DLL uses the expected AMD64
-PE identity and contains ARM64EC/ARM64X CHPE metadata. This proves the module can
-be built and packaged; it does **not** prove House Party video/audio playback.
-The bridge remains opt-in per game to avoid changing unrelated x64 titles.
+PE identity and contains ARM64EC/ARM64X CHPE metadata. Successful run 36986397572
+produced SHA-256 `f7f23a38fffad0f086e14d71f4b387cd1bfa35b8c0504af3b383b1e02e77ef0e`.
+This proves the module can be built and packaged; it does **not** prove House Party
+video/audio playback. The bridge remains opt-in per game to avoid changing unrelated
+x64 titles. The media workflow now also retains the compiled DLL plus provenance as
+a reusable, time-limited CI artifact.
+
+## Current automation baseline
+
+- CrossOver Mac matrix now covers DXMT, D3DMetal, DXVK and Wine/wined3d in isolated bottles.
+- `tools/house-party/run-local-cycle.sh` auto-discovers the known owned input, creates only derived staging/results, fingerprints the build, records GPTK4/Metal CLI state, and runs the four-backend CrossOver smoke matrix.
+- `tools/madeira_log_triage.py` and `docs/IPAD_M4_TRIAGE.md` are present on the active branch for the next M4 device run. The triage CI is green.
+- Current upstream after v0.1.1 has only an app-version-plist cleanup relative to this House Party base; it is not on the first-playable critical path.
+
