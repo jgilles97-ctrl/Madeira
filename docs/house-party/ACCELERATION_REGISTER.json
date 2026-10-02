@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-02T08:40:00Z",
+  "ranking_rule": "expected project time saved × probability of success × downstream tasks unlocked",
+  "items": [
+    {
+      "id": "sync-madeira-0.1.1",
+      "idea": "Fast-forward Joey's Madeira fork to current upstream before carrying House Party-specific work forward.",
+      "source": "willfaust/Madeira upstream main",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "high; avoids debugging against 123 superseded commits",
+      "dependency_unlocked": "current 63 GB address-map launch path, current ntdll image mapping fixes, current input/media/library work",
+      "implementation_cost": "low",
+      "risk": "low; old House Party branch preserved",
+      "status": "keep",
+      "experiment_performed": "Compared old fork main d5a8e0a to upstream b0a6692; old main was a direct ancestor. Fast-forwarded main without force.",
+      "measured_result": "main now points at upstream v0.1.1 commit b0a6692; historical joey-house-party branch remains untouched"
+    },
+    {
+      "id": "fresh-house-party-branch",
+      "idea": "Preserve the stale branch and rebuild House Party integration from current main instead of rebasing 241 commits of divergence.",
+      "source": "repository compare joey-house-party...main",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "high; prevents large conflict/retest surface",
+      "dependency_unlocked": "safe current-base automation and targeted compatibility fixes",
+      "implementation_cost": "low",
+      "risk": "low",
+      "status": "keep",
+      "experiment_performed": "Created joey-house-party-current from main.",
+      "measured_result": "new branch starts at current upstream while old branch retains four historical House Party commits"
+    },
+    {
+      "id": "current-address-map-fixes",
+      "idea": "Retest House Party against upstream's October 2 63 GB launch map and ntdll image-mapping fixes before writing more JIT/mapping patches.",
+      "source": "Madeira merges #109, #110 and #111",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "potentially high if prior launch failures were address/image mapping related",
+      "dependency_unlocked": "first House Party process launch on physical iPad",
+      "implementation_cost": "low after current Debug build exists",
+      "risk": "low; upstream code",
+      "status": "revisit-on-device",
+      "experiment_performed": "Integrated by upstream fast-forward; device test deliberately not run while iPad is in use.",
+      "measured_result": "code integrated; House Party runtime effect not yet measured"
+    },
+    {
+      "id": "x64-winegstreamer",
+      "idea": "Package Wine's ARM64EC winegstreamer PE module and keep the native media bridge opt-in with MADEIRA_WG_64BIT=1.",
+      "source": "docs/MEDIA.md and current Wine build configuration",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "medium-high for cutscene/video/audio compatibility in a 64-bit Unity game",
+      "dependency_unlocked": "64-bit Media Foundation/DirectShow calls can reach Madeira's FFmpeg/VideoToolbox/AudioToolbox unix side",
+      "implementation_cost": "low",
+      "risk": "low while opt-in",
+      "status": "implemented-awaiting-build",
+      "experiment_performed": "Added build/wine-pe/build-winegstreamer.sh, documentation, and source-level guard test.",
+      "measured_result": "packaging path exists and is isolated; binary/device runtime still needs an Apple build host"
+    },
+    {
+      "id": "owned-build-fingerprint",
+      "idea": "Generate a repeatable JSON architecture/compatibility manifest directly from the owned extracted game.",
+      "source": "House Party project requirement",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "medium; removes repeated architecture guessing and makes future version diffs cheap",
+      "dependency_unlocked": "evidence-based Mac/iPad runtime configuration and reconstruction feasibility",
+      "implementation_cost": "low",
+      "risk": "low; source tree opened read-only",
+      "status": "implemented-awaiting-owned-build-run",
+      "experiment_performed": "Added tools/house-party/fingerprint.py plus a synthetic host test.",
+      "measured_result": "test fixture detects x86_64 Unity IL2CPP, Unity version, D3D11/XInput imports and hashes without source mutation"
+    },
+    {
+      "id": "gptk4-agent-skills",
+      "idea": "Use Apple's current GPTK 4 Codex skills and macOS 27 gpucapture/gpudebug when the local Mac environment has them.",
+      "source": "apple/game-porting-toolkit",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "medium on native/Metal diagnosis; lower for pure Madeira runtime work",
+      "dependency_unlocked": "repeatable Metal captures, trace diagnosis, persistent .porting workflow",
+      "implementation_cost": "low",
+      "risk": "low",
+      "status": "implemented-probe-awaiting-local-run",
+      "experiment_performed": "Added read-only tools/house-party/check-gptk4.sh.",
+      "measured_result": "environment probe is ready; installation state cannot be truthfully asserted until run on Joey's Mac"
+    },
+    {
+      "id": "old-release-ios-ci",
+      "idea": "Reuse the old joey-house-party Release iOS workflow unchanged.",
+      "source": "historical joey-house-party branch",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "negative",
+      "dependency_unlocked": "none",
+      "implementation_cost": "medium",
+      "risk": "high; current docs say Release guest execution has crashed while Debug is the runnable configuration",
+      "status": "reject",
+      "experiment_performed": "Compared historical workflow against current docs/BUILDING.md.",
+      "measured_result": "workflow is stale and was not ported"
+    },
+    {
+      "id": "coredevice-screenshot-loop",
+      "idea": "Continue repeating the same CoreDevice screenshot transport retry before testing current runtime changes.",
+      "source": "historical House Party validation work",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "low",
+      "dependency_unlocked": "capture only, not process launch",
+      "implementation_cost": "medium",
+      "risk": "wastes cycles and conflates capture with runtime status",
+      "status": "reject-until-new-hypothesis",
+      "experiment_performed": "Reconciled prior repeated capture failure against separate runtime/JIT plumbing evidence.",
+      "measured_result": "capture remains a validation subsystem, not the current runtime critical path"
+    }
+  ]
+}
