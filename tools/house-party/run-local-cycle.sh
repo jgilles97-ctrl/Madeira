@@ -75,6 +75,7 @@ log "source (read-only input): $SOURCE"
 log "results: $RESULTS"
 
 python3 "$ROOT/tools/house-party/fingerprint.py" "$SOURCE" -o "$RESULTS/compatibility-manifest.json"
+python3 "$ROOT/tools/house-party/reconstruction-feasibility.py" "$RESULTS/compatibility-manifest.json" -o "$RESULTS/reconstruction-feasibility.json"
 
 bash "$ROOT/tools/house-party/check-gptk4.sh" >"$RESULTS/gptk4-environment.txt" 2>&1 || true
 
@@ -105,6 +106,7 @@ summary = {
     "outputs": {
         "compatibility_manifest": str(root / "compatibility-manifest.json"),
         "gptk4_environment": str(root / "gptk4-environment.txt"),
+        "reconstruction_feasibility": str(root / "reconstruction-feasibility.json"),
         "crossover_matrix": str(matrix_path),
     },
     "crossover": matrix,
