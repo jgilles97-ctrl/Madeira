@@ -54,14 +54,55 @@ echo "Downloading latest supported Microsoft x64 VC++ redistributable..."
 VCEXE="$TMP/vc_redist.x64.exe"
 curl -fL --retry 3 "$VCREDIST_URL" -o "$VCEXE"
 VCEXE_SHA="$(shasum -a 256 "$VCEXE" | awk '{print $1}')"
-mkdir -p "$TMP/vc-outer" "$TMP/vc-expand"
+mkdir -p "$TMP/vc-outer" "$TMP/vc-burn-cabs" "$TMP/vc-expand"
 7zz x "$VCEXE" "-o$TMP/vc-outer" -y >/dev/null
 
-# Microsoft's bootstrapper layout has changed across VC Redist releases. Do not
-# depend on .rsrc/1033/CABINET: recursively ask 7-Zip which embedded files are
-# archives/containers and expand them into isolated derived directories. The
-# final selector below still requires the exact DLL names, x86-64 PE machine and
-# an intact Authenticode certificate payload.
+# Modern VC Redist is a WiX Burn bundle. 7-Zip's PE handler does not always
+# expose Burn's attached container directly, so also carve every structurally
+# valid CAB stream from the Microsoft installer. CAB's cbCabinet field is a
+# self-delimiting size at offset 8; malformed/overlapping candidates are ignored.
+python3 - "$VCEXE" "$TMP/vc-burn-cabs" <<'PY'
+import struct, sys
+from pathlib import Path
+src, out = Path(sys.argv[1]), Path(sys.argv[2])
+data = src.read_bytes()
+out.mkdir(parents=True, exist_ok=True)
+pos = 0; spans = []; n = 0
+while True:
+    pos = data.find(b"MSCF", pos)
+    if pos < 0: break
+    if pos + 36 > len(data):
+        break
+    try:
+        size = struct.unpack_from("<I", data, pos + 8)[0]
+        folders = struct.unpack_from("<H", data, pos + 26)[0]
+        files = struct.unpack_from("<H", data, pos + 28)[0]
+    except struct.error:
+        pos += 4; continue
+    end = pos + size
+    valid = 36 <= size <= len(data) - pos and folders > 0 and files > 0
+    overlaps = any(not (end <= a or pos >= b) for a, b in spans)
+    if valid and not overlaps:
+        n += 1
+        (out / f"burn-{n}.cab").write_bytes(data[pos:end])
+        spans.append((pos, end))
+        pos = end
+    else:
+        pos += 4
+if not n:
+    raise SystemExit("No structurally valid Burn CAB container found in Microsoft redistributable")
+print(f"Burn CAB containers carved: {n}")
+PY
+
+for cab in "$TMP"/vc-burn-cabs/*.cab; do
+  name="$(basename "$cab" .cab)"
+  mkdir -p "$TMP/vc-outer/$name"
+  7zz x "$cab" "-o$TMP/vc-outer/$name" -y >/dev/null
+done
+
+# Recursively ask 7-Zip which payload files are archives/containers and expand
+# them into isolated derived directories. The final selector below still
+# requires exact DLL names, x86-64 PE machine and intact Authenticode payload.
 search_dir="$TMP/vc-outer"
 for round in 1 2 3; do
   round_dir="$TMP/vc-expand/round-$round"
