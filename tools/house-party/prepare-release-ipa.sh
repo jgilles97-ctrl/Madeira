@@ -104,7 +104,7 @@ done
 # them into isolated derived directories. The final selector below still
 # requires exact DLL names, x86-64 PE machine and intact Authenticode payload.
 search_dir="$TMP/vc-outer"
-for round in 1 2 3; do
+for round in 1 2 3 4 5 6; do
   round_dir="$TMP/vc-expand/round-$round"
   mkdir -p "$round_dir"
   expanded=0
@@ -165,6 +165,21 @@ for name in names:
         except (OSError, struct.error):
             continue
     if not chosen:
+        same_name = [p for p in root.rglob("*") if p.is_file() and p.name.lower() == name.lower()]
+        sample = []
+        for p in same_name[:12]:
+            try:
+                d = p.read_bytes()
+                pe = struct.unpack_from("<I", d, 0x3c)[0] if len(d) >= 0x40 and d[:2] == b"MZ" else -1
+                machine = struct.unpack_from("<H", d, pe + 4)[0] if pe >= 0 and pe + 6 <= len(d) else -1
+                sample.append(f"{p}: bytes={len(d)} machine={machine:#x}")
+            except Exception as exc:
+                sample.append(f"{p}: {exc}")
+        available = sorted({p.name for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".dll"})
+        print(f"VC extraction diagnostic: {len(same_name)} candidate(s) named {name}", file=sys.stderr)
+        for line in sample:
+            print("  " + line, file=sys.stderr)
+        print("VC extraction diagnostic: DLL names found: " + ", ".join(available[:120]), file=sys.stderr)
         raise SystemExit(f"missing signed x86_64 Microsoft runtime DLL: {name}")
     target = out / name
     shutil.copyfile(chosen, target)
