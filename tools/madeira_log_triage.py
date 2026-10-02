@@ -78,6 +78,13 @@ RULES: tuple[Rule, ...] = (
         re.compile(r"(?:launch\s+refusal\s*29|invalid\s+platform|(?:error|code)\s*29\b)", re.I),
         "Treat this as a launch/load failure signal; include preceding Madeira load error lines.",
     ),
+    Rule(
+        "session_failed_before_process",
+        "HIGH",
+        "Session failed before the Windows process reached Madeira's running state",
+        re.compile(r"\[session-stage\]\s+stage=failed-before-process\b", re.I),
+        "Inspect the immediately preceding JIT/address-map/loader lines. Rendering, media and input are downstream and are not implicated yet.",
+    ),
 )
 
 POSITIVE_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
@@ -90,6 +97,21 @@ POSITIVE_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         "clean_x64_probe",
         "x64 probe reported clean execution",
         re.compile(r"(?:cube-x64\s+clean|0\s+segv\b|0\s+c0000005\b)", re.I),
+    ),
+    (
+        "session_process_running",
+        "Windows process reached Madeira's running state",
+        re.compile(r"\[session-stage\]\s+stage=process-running\b", re.I),
+    ),
+    (
+        "session_surface_created",
+        "Windows rendering surface was observed",
+        re.compile(r"\[session-stage\]\s+stage=first-surface\b", re.I),
+    ),
+    (
+        "session_first_present",
+        "At least one Metal/DXMT presentation was observed",
+        re.compile(r"\[session-stage\]\s+stage=first-present\b", re.I),
     ),
 )
 
@@ -154,6 +176,16 @@ def triage_text(text: str) -> dict[str, object]:
     for finding in findings:
         severity_counts[str(finding["severity"])] += 1
 
+    positive_codes = {str(item["code"]) for item in positive_signals}
+    if "session_first_present" in positive_codes:
+        automated_milestone = "renders"
+    elif "session_surface_created" in positive_codes:
+        automated_milestone = "launches (surface created; rendering not yet proven)"
+    elif "session_process_running" in positive_codes:
+        automated_milestone = "launches (process running; surface/rendering not yet proven)"
+    else:
+        automated_milestone = "below launches"
+
     return {
         "schema": SCHEMA,
         "line_count": len(lines),
@@ -161,6 +193,7 @@ def triage_text(text: str) -> dict[str, object]:
         "severity_counts": severity_counts,
         "findings": findings,
         "positive_signals": positive_signals,
+        "automated_runtime_milestone": automated_milestone,
         "notes": [
             "Heuristic summary only: a matching line is evidence to inspect, not proof of root cause.",
             "The tool is offline/read-only and redacts common local paths and secret-like values from samples.",
@@ -177,6 +210,7 @@ def render_text(report: dict[str, object], source: pathlib.Path) -> str:
         f"Source: `{source.name}`",
         f"Lines: {report['line_count']}",
         f"Findings: {report['finding_count']}",
+        f"Automated runtime milestone: {report['automated_runtime_milestone']}",
         "Severity: "
         + ", ".join(f"{sev}={counts.get(sev, 0)}" for sev in ("CRITICAL", "HIGH", "MEDIUM", "INFO")),
         "",
