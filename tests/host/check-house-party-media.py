@@ -15,6 +15,10 @@ assert "--enable-winegstreamer" in text
 assert 'dirname "${BASH_SOURCE[0]}"' in text
 assert '\\${BASH_SOURCE[0]}' not in text
 assert "arm64ec-w64-mingw32-clang" in text
+assert "0x8664" in text
+assert "CHPEMetadata" in text
+assert "--coff-load-config" in text
+assert "0xA641" in text and "intermediate" in text
 assert "dlls/winegstreamer/arm64ec-windows/winegstreamer.dll" in text
 assert 'app/Madeira/arm64ec-windows/winegstreamer.dll' in text
 assert "MADEIRA_WG_64BIT = 1" in text
