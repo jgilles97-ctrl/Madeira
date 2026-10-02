@@ -10,7 +10,8 @@ text = p.read_text()
 subprocess.run(["bash", "-n", str(p)], check=True)
 
 required = [
-    "Madeira-0.1.1.ipa",
+    "MADEIRA_VERSION=\"0.1.1\"",
+    "Madeira-${MADEIRA_VERSION}.ipa",
     "045aeb8fd4c71c2e6a78fb4511f94c56f8ed7af14c47a3b0ea2937a4fc8bfcee",
     "https://aka.ms/vc14/vc_redist.x64.exe",
     "house-party-winegstreamer-arm64ec",
