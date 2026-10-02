@@ -37,9 +37,12 @@ routing was repaired, but the attempt stopped at a sandbox Unix-socket permissio
 blocker before a verified House Party boot. No prior Mac report proves main menu or
 gameplay. This cycle has not produced a fresh runtime result either.
 
-Next measurement is a clean, repeatable DX11 matrix on the Mac, preserving one
-known-good prefix per backend. DXMT and D3DMetal should be compared rather than
-ranked by assumption.
+A clean CrossOver smoke matrix is now automated in
+`tools/house-party/mac-crossover-smoke.sh`. It creates a derived game copy and
+dedicated bottles for DXMT, D3DMetal and wined3d, captures per-backend logs/JSON,
+and explicitly treats process survival as diagnostic rather than gameplay proof.
+It still requires execution on Joey's Mac before any fresh runtime milestone can
+be claimed.
 
 ### iPad / Madeira
 
@@ -110,3 +113,12 @@ Older percentage and calendar estimates described pipeline readiness, not verifi
 gameplay. They are superseded by the milestone vocabulary above. Do not derive a
 new completion percentage from staged files, CI jobs, JIT attachment, install
 success or capture plumbing.
+
+
+## Media bridge result — 2026-10-02
+
+The open-source ARM64EC `winegstreamer.dll` PE half now compiles on a macOS CI
+host and passes final-image verification: the hybrid DLL uses the expected AMD64
+PE identity and contains ARM64EC/ARM64X CHPE metadata. This proves the module can
+be built and packaged; it does **not** prove House Party video/audio playback.
+The bridge remains opt-in per game to avoid changing unrelated x64 titles.
