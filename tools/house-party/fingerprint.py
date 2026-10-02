@@ -90,6 +90,82 @@ def pe_info(path: Path) -> dict | None:
     except (OSError, struct.error, ValueError):
         return None
 
+def pe_version_metadata(path: Path | None) -> dict:
+    """Read PE VERSIONINFO metadata without executing or loading the image."""
+    if not path:
+        return {}
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return {}
+
+    out = {}
+    # VS_FIXEDFILEINFO is stable and gives numeric file/product versions even
+    # when the localized StringFileInfo table is absent.
+    signature = b"\xbd\x04\xef\xfe"
+    start = 0
+    while True:
+        pos = data.find(signature, start)
+        if pos < 0:
+            break
+        if pos + 24 <= len(data):
+            struct_version = struct.unpack_from("<I", data, pos + 4)[0]
+            if struct_version in (0x00010000, 0x00010001):
+                fv_ms, fv_ls, pv_ms, pv_ls = struct.unpack_from("<IIII", data, pos + 8)
+                def dotted(ms, ls):
+                    return f"{ms >> 16}.{ms & 0xffff}.{ls >> 16}.{ls & 0xffff}"
+                out["file_version_fixed"] = dotted(fv_ms, fv_ls)
+                out["product_version_fixed"] = dotted(pv_ms, pv_ls)
+                break
+        start = pos + 4
+
+    # Also record human-readable StringFileInfo values when present. VERSIONINFO
+    # strings are UTF-16LE and NUL terminated; cap each value to avoid wandering
+    # into arbitrary binary data if a malformed resource is encountered.
+    for key in ("FileVersion", "ProductVersion", "ProductName", "CompanyName", "OriginalFilename"):
+        needle = key.encode("utf-16le") + b"\x00\x00"
+        pos = data.find(needle)
+        if pos < 0:
+            continue
+        cur = pos + len(needle)
+        if cur & 1:
+            cur += 1
+        while cur + 1 < len(data) and data[cur:cur + 2] == b"\x00\x00":
+            cur += 2
+        raw = bytearray()
+        for _ in range(256):
+            if cur + 1 >= len(data):
+                break
+            pair = data[cur:cur + 2]
+            cur += 2
+            if pair == b"\x00\x00":
+                break
+            raw += pair
+        try:
+            value = raw.decode("utf-16le").strip()
+        except UnicodeDecodeError:
+            continue
+        if value and all(ch.isprintable() for ch in value):
+            out[key] = value
+    return out
+
+def read_steam_app_ids(files: list[Path], root: Path) -> list[dict]:
+    rows = []
+    for path in files:
+        if path.name.lower() != "steam_appid.txt":
+            continue
+        try:
+            raw = path.read_text(errors="replace").strip()
+        except OSError:
+            continue
+        match = re.fullmatch(r"\d{1,12}", raw)
+        rows.append({
+            "path": str(path.relative_to(root)),
+            "app_id": int(raw) if match else None,
+            "raw": raw[:64] if not match else None,
+        })
+    return sorted(rows, key=lambda row: row["path"].lower())
+
 def find_unity_version(paths: list[Path]):
     candidates = sorted(paths, key=lambda p: (p.name.lower() != "globalgamemanagers",
                                                p.name.lower() != "unityplayer.dll"))
@@ -188,6 +264,9 @@ def main(argv=None):
         scripting = evidence("unknown", confidence="unverified")
 
     unity_ver, unity_src = find_unity_version(files)
+    main_version = pe_version_metadata(main_exe)
+    unityplayer_version = pe_version_metadata(unityplayer)
+    steam_app_ids = read_steam_app_ids(files, root)
     pe_files, dll_imports = [], set()
     for p in files:
         if p.suffix.lower() not in {".exe", ".dll"}:
@@ -220,6 +299,19 @@ def main(argv=None):
     input_apis = sorted(x for x in dll_imports if re.match(r"(xinput.*|dinput8?|user32|gameinput)\.dll$", x))
     audio_apis = sorted(x for x in dll_imports if re.match(r"(xaudio.*|x3daudio.*|dsound|winmm|fmod.*)\.dll$", x))
     network_apis = sorted(x for x in dll_imports if x in {"ws2_32.dll", "winhttp.dll", "wininet.dll", "urlmon.dll"})
+    media_dependency_imports = sorted(
+        x for x in dll_imports
+        if re.match(r"(?:mf|mfplat|mfreadwrite|quartz|wmvcore|avcodec.*|avformat.*|bink.*|fmod.*|xaudio.*|x3daudio.*|winmm)\.dll$", x)
+    )
+    video_evidence = []
+    if any(name.lower().endswith("unityengine.videomodule.dll") for name in managed_assemblies):
+        video_evidence.append("UnityEngine.VideoModule present in scripting assemblies")
+    if "mfplat.dll" in dll_imports or "mfreadwrite.dll" in dll_imports or "mf.dll" in dll_imports:
+        video_evidence.append("Windows Media Foundation imports observed")
+    if "quartz.dll" in dll_imports:
+        video_evidence.append("DirectShow/quartz import observed")
+    if media:
+        video_evidence.append(f"{len(media)} packaged media file(s) with recognized media extensions")
 
     important = {x for x in [main_exe, gameassembly, unityplayer, metadata] if x}
     important.update(p for p in files if p.name.lower() in {"steam_api64.dll", "steam_api.dll", "steam_appid.txt"})
@@ -245,13 +337,19 @@ def main(argv=None):
             "architecture": evidence(main_info["machine"] if main_info else None,
                                      str(main_exe) if main_exe else None,
                                      "observed" if main_info else "unverified"),
-            "exact_build_version": evidence(None, confidence="unverified"),
+            "exact_build_version": evidence(
+                main_version.get("ProductVersion") or main_version.get("product_version_fixed")
+                or main_version.get("FileVersion") or main_version.get("file_version_fixed"),
+                str(main_exe) if main_exe and main_version else None,
+                "observed" if main_version else "unverified"),
+            "pe_version_metadata": main_version,
         },
         "engine": {
             "family": evidence("Unity" if unityplayer or gameassembly or metadata or mono_dir else "unknown",
                                str(unityplayer or gameassembly or metadata or mono_dir or ""),
                                "observed" if (unityplayer or gameassembly or metadata or mono_dir) else "unverified"),
             "unity_version": evidence(unity_ver, unity_src, "observed" if unity_ver else "unverified"),
+            "unity_player_pe_version_metadata": unityplayer_version,
             "scripting_backend": scripting,
             "unity_player": str(unityplayer.relative_to(root)) if unityplayer else None,
             "game_assembly": str(gameassembly.relative_to(root)) if gameassembly else None,
@@ -270,9 +368,12 @@ def main(argv=None):
             "pe_imports": sorted(dll_imports),
             "vc_runtime_imports": vc,
             "steam_files": steam,
+            "steam_app_ids": steam_app_ids,
             "input_api_imports": input_apis,
             "audio_api_imports": audio_apis,
             "network_api_imports": network_apis,
+            "media_dependency_imports": media_dependency_imports,
+            "video_playback_evidence": video_evidence,
             "registry_dependency": evidence("advapi32.dll" in dll_imports,
                                             "PE import advapi32.dll" if "advapi32.dll" in dll_imports else None,
                                             "inferred" if "advapi32.dll" in dll_imports else "unverified"),
@@ -289,7 +390,8 @@ def main(argv=None):
         "pe_files": pe_files,
         "notes": [
             "A missing import is not proof an API is unused; Unity/plugins may load DLLs dynamically.",
-            "Save location and exact game build version remain unverified until runtime/config evidence identifies them.",
+            "Save location remains unverified until runtime/config evidence identifies it.",
+            "PE ProductVersion/FileVersion is recorded as exact_build_version when present; treat it as executable metadata, not a guarantee of storefront build identity.",
         ],
     }
     text = json.dumps(manifest, indent=2, sort_keys=True)
