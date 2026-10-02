@@ -64,10 +64,36 @@ class MadeiraLogTriageTests(unittest.TestCase):
         self.assertEqual(finding["count"], 8)
         self.assertEqual(len(finding["samples"]), 3)
 
+    def test_session_stage_milestones(self):
+        report = mod.triage_text(
+            "\n".join(
+                [
+                    "[session-stage] stage=begin elapsed_ms=0 bits=64 api=Direct3D 11 media64=1",
+                    "[session-stage] stage=process-running elapsed_ms=900",
+                    "[session-stage] stage=first-surface elapsed_ms=1300 delta=1",
+                    "[session-stage] stage=first-present elapsed_ms=1550 delta=1",
+                ]
+            )
+        )
+        codes = {p["code"] for p in report["positive_signals"]}
+        self.assertIn("session_process_running", codes)
+        self.assertIn("session_surface_created", codes)
+        self.assertIn("session_first_present", codes)
+        self.assertEqual(report["automated_runtime_milestone"], "renders")
+
+    def test_session_failure_before_process(self):
+        report = mod.triage_text(
+            "[session-stage] stage=failed-before-process elapsed_ms=42 reason=no debugger\n"
+        )
+        codes = {f["code"] for f in report["findings"]}
+        self.assertIn("session_failed_before_process", codes)
+        self.assertEqual(report["automated_runtime_milestone"], "below launches")
+
     def test_no_known_marker(self):
         report = mod.triage_text("ordinary startup line\nanother ordinary line\n")
         self.assertEqual(report["finding_count"], 0)
         self.assertEqual(report["line_count"], 2)
+        self.assertEqual(report["automated_runtime_milestone"], "below launches")
 
 
 if __name__ == "__main__":
