@@ -112,6 +112,45 @@ def evidence(value, source=None, confidence="observed"):
         out["source"] = source
     return out
 
+def read_scripting_assemblies(path: Path | None) -> list[str]:
+    if not path:
+        return []
+    try:
+        obj = json.loads(path.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    values = obj.get("names", []) if isinstance(obj, dict) else []
+    return sorted({str(x) for x in values if isinstance(x, str)})
+
+def il2cpp_metadata_version(path: Path | None):
+    if not path:
+        return None
+    try:
+        head = path.read_bytes()[:8]
+        if len(head) == 8 and struct.unpack_from("<I", head, 0)[0] == 0xFAB11BAF:
+            return struct.unpack_from("<I", head, 4)[0]
+    except (OSError, struct.error):
+        pass
+    return None
+
+def read_boot_config(path: Path | None) -> dict[str, str]:
+    if not path:
+        return {}
+    out = {}
+    try:
+        for raw in path.read_text(errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, value = line.split("=", 1)
+                out[key.strip()] = value.strip()
+            else:
+                out[line] = ""
+    except OSError:
+        return {}
+    return dict(sorted(out.items()))
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("source", help="Read-only extracted Windows game directory")
@@ -134,6 +173,12 @@ def main(argv=None):
     mono_dir = next((p for p in root.rglob("MonoBleedingEdge") if p.is_dir()), None)
     assembly_csharp = next((p for p in files if p.name.lower() == "assembly-csharp.dll"
                             and "managed" in p.as_posix().lower()), None)
+    scripting_json = next((p for p in files if p.name.lower() == "scriptingassemblies.json"), None)
+    boot_config = next((p for p in files if p.name.lower() == "boot.config"
+                        and "_data" in p.as_posix().lower()), None)
+    managed_assemblies = read_scripting_assemblies(scripting_json)
+    metadata_version = il2cpp_metadata_version(metadata)
+    boot_values = read_boot_config(boot_config)
 
     if gameassembly and metadata:
         scripting = evidence("IL2CPP", f"{gameassembly}; {metadata}")
@@ -162,6 +207,12 @@ def main(argv=None):
     plugins = sorted(str(p.relative_to(root)) for p in files
                      if p.suffix.lower() in PLUGIN_EXTS
                      and "/plugins/" in ("/" + p.relative_to(root).as_posix().lower()))
+    plugin_details = sorted(
+        ({"path": row["path"], "machine": row["machine"], "imports": row["imports"]}
+         for row in pe_files if row["path"] in plugins),
+        key=lambda row: row["path"].lower())
+    launchers = sorted({"path": str(p.relative_to(root)), **(pe_info(p) or {})}
+                       for p in exes)
     media = sorted(str(p.relative_to(root)) for p in files if p.suffix.lower() in MEDIA_EXTS)
     steam = sorted(str(p.relative_to(root)) for p in files
                    if p.name.lower() in {"steam_api.dll", "steam_api64.dll", "steam_appid.txt"})
@@ -173,6 +224,7 @@ def main(argv=None):
     important = {x for x in [main_exe, gameassembly, unityplayer, metadata] if x}
     important.update(p for p in files if p.name.lower() in {"steam_api64.dll", "steam_api.dll", "steam_appid.txt"})
     important.update(p for p in files if str(p.relative_to(root)) in plugins)
+    important.update(p for p in [scripting_json, boot_config] if p)
     hashes = {}
     for p in (files if args.hash_all else sorted(important)):
         try:
@@ -204,6 +256,14 @@ def main(argv=None):
             "unity_player": str(unityplayer.relative_to(root)) if unityplayer else None,
             "game_assembly": str(gameassembly.relative_to(root)) if gameassembly else None,
             "global_metadata": str(metadata.relative_to(root)) if metadata else None,
+            "il2cpp_metadata_version": evidence(metadata_version, str(metadata) if metadata else None,
+                                                "observed" if metadata_version is not None else "unverified"),
+            "scripting_assemblies": managed_assemblies,
+            "scripting_assemblies_source": str(scripting_json.relative_to(root)) if scripting_json else None,
+            "boot_config": {
+                "path": str(boot_config.relative_to(root)) if boot_config else None,
+                "values": boot_values,
+            },
         },
         "compatibility": {
             "graphics_apis": graphics,
@@ -217,8 +277,13 @@ def main(argv=None):
                                             "PE import advapi32.dll" if "advapi32.dll" in dll_imports else None,
                                             "inferred" if "advapi32.dll" in dll_imports else "unverified"),
             "save_location": evidence(None, confidence="unverified"),
-            "native_plugins": plugins,
+            "native_plugins": plugin_details,
+            "launcher_executables": launchers,
             "media_files": media,
+            "unity_video_module": evidence(
+                any(name.lower().endswith("unityengine.videomodule.dll") for name in managed_assemblies),
+                str(scripting_json.relative_to(root)) if scripting_json else None,
+                "inferred" if managed_assemblies else "unverified"),
         },
         "hashes": {"mode": "all" if args.hash_all else "important", "sha256": hashes},
         "pe_files": pe_files,
