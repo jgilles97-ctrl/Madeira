@@ -11,7 +11,7 @@ SPEC = importlib.util.spec_from_file_location("hp_fingerprint", ROOT / "tools/ho
 MOD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MOD)
 
-def make_pe(path: Path, machine=0x8664, imports=("d3d11.dll", "steam_api64.dll", "xinput1_4.dll")):
+def make_pe(path: Path, machine=0x8664, imports=("d3d11.dll", "steam_api64.dll", "xinput1_4.dll", "mfplat.dll"), file_version=(1, 2, 3, 4), product_version=(5, 6, 7, 8)):
     peoff = 0x80
     data = bytearray(0x1000)
     data[:2] = b"MZ"
@@ -34,6 +34,13 @@ def make_pe(path: Path, machine=0x8664, imports=("d3d11.dll", "steam_api64.dll",
         raw = name.encode() + b"\0"
         data[names:names + len(raw)] = raw
         names += len(raw)
+
+    # Minimal VS_FIXEDFILEINFO fixture. The production reader only observes it;
+    # it does not require a full resource tree to decode the stable structure.
+    def words(v):
+        return (v[0] << 16) | v[1], (v[2] << 16) | v[3]
+    fv_ms, fv_ls = words(file_version); pv_ms, pv_ls = words(product_version)
+    struct.pack_into("<IIIIII", data, 0x900, 0xFEEF04BD, 0x00010000, fv_ms, fv_ls, pv_ms, pv_ls)
     path.write_bytes(data)
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -53,6 +60,7 @@ with tempfile.TemporaryDirectory() as tmp:
     plugins.mkdir(parents=True)
     make_pe(plugins / "sample.dll", imports=("user32.dll",))
     (root / "steam_api64.dll").write_bytes(b"steam")
+    (root / "steam_appid.txt").write_text("611790\n")
 
     before = {p.relative_to(root): p.stat().st_mtime_ns for p in root.rglob("*") if p.is_file()}
     out = root.parent / "manifest.json"
@@ -63,6 +71,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert before == after, "fingerprint modified source files"
     assert report["source_policy"] == "read-only"
     assert report["game"]["architecture"]["value"] == "x86_64"
+    assert report["game"]["exact_build_version"]["value"] == "5.6.7.8"
+    assert report["game"]["pe_version_metadata"]["file_version_fixed"] == "1.2.3.4"
+    assert report["game"]["pe_version_metadata"]["product_version_fixed"] == "5.6.7.8"
     assert report["engine"]["family"]["value"] == "Unity"
     assert report["engine"]["unity_version"]["value"] == "2021.3.33f1"
     assert report["engine"]["scripting_backend"]["value"] == "IL2CPP"
@@ -71,6 +82,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert report["engine"]["boot_config"]["values"]["gfx-enable-gfx-jobs"] == "1"
     assert {"api": "Direct3D 11", "evidence": "PE import d3d11.dll"} in report["compatibility"]["graphics_apis"]
     assert "xinput1_4.dll" in report["compatibility"]["input_api_imports"]
+    assert "mfplat.dll" in report["compatibility"]["media_dependency_imports"]
+    assert report["compatibility"]["steam_app_ids"][0]["app_id"] == 611790
+    assert "Windows Media Foundation imports observed" in report["compatibility"]["video_playback_evidence"]
     assert report["compatibility"]["unity_video_module"]["value"] is True
     assert report["compatibility"]["launcher_executables"][0]["machine"] == "x86_64"
     plugin = next(x for x in report["compatibility"]["native_plugins"] if x["path"].endswith("sample.dll"))
