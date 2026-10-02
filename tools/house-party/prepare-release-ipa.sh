@@ -62,7 +62,7 @@ mkdir -p "$TMP/vc-outer" "$TMP/vc-expand"
 # archives/containers and expand them into isolated derived directories. The
 # final selector below still requires the exact DLL names, x86-64 PE machine and
 # an intact Authenticode certificate payload.
-VC_SEARCH_ROOT="$TMP/vc-outer"
+search_dir="$TMP/vc-outer"
 for round in 1 2 3; do
   round_dir="$TMP/vc-expand/round-$round"
   mkdir -p "$round_dir"
@@ -71,8 +71,8 @@ for round in 1 2 3; do
   while IFS= read -r -d "" candidate; do
     # Keep the recursion bounded and skip obvious final binaries. 7-Zip can
     # inspect PE files too, which would otherwise create useless resource trees.
-    case "${candidate,,}" in
-      *.dll|*.exe) [[ "$candidate" == "$VCEXE" ]] && continue; [[ "$candidate" != "$VCEXE" ]] && continue;;
+    case "$candidate" in
+      *.[dD][lL][lL]|*.[eE][xX][eE]) continue;;
     esac
     ((index+=1))
     dest="$round_dir/$index"
@@ -84,10 +84,8 @@ for round in 1 2 3; do
         rm -rf "$dest"
       fi
     fi
-  done < <(find "$VC_SEARCH_ROOT" -type f -size -128M -print0)
-  VC_SEARCH_ROOT="$TMP/vc-outer:$TMP/vc-expand"
-  # Colon-separated roots are only for our note above; the actual final search
-  # walks both directories. Stop early when no new container was expandable.
+  done < <(find "$search_dir" -type f -size -128M -print0)
+  search_dir="$round_dir"
   (( expanded > 0 )) || break
 done
 VC_FILES_ROOT="$TMP"
