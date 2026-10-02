@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-02T08:56:00Z",
+  "updated_at": "2026-10-02T10:32:00Z",
   "ranking_rule": "expected project time saved × probability of success × downstream tasks unlocked",
   "items": [
     {
@@ -132,6 +132,58 @@
       "status": "keep",
       "experiment_performed": "Real macOS CI linked the DLL, old validator rejected 0x8664, validator was changed to accept the final hybrid PE and require CHPEMetadata via llvm-readobj.",
       "measured_result": "the next macOS CI run passed compile, CHPE verification and output verification"
+    },
+    {
+      "id": "m4-log-triage",
+      "idea": "Bring the fork's read-only M4/iPad diagnostic log triage into the active House Party branch.",
+      "source": "jgilles97-ctrl/Madeira main commit 7a52f174a6967238eff110db408fa18964459afe",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "medium-high after the next physical-iPad run; converts recurring JIT/address/TEB/Steam signatures into comparable structured evidence",
+      "dependency_unlocked": "faster discrimination between JIT/debugger failure, address-space failure, Windows crash and Steam refusal",
+      "implementation_cost": "low",
+      "risk": "low; offline/read-only and heuristic labels are explicitly non-causal",
+      "status": "implemented-tested",
+      "experiment_performed": "Copied the triage utility, tests, guide and CI workflow onto joey-house-party-current.",
+      "measured_result": "Madeira log triage workflow run 36995699997 completed successfully."
+    },
+    {
+      "id": "persist-media-artifact",
+      "idea": "Retain the compiled open-source ARM64EC winegstreamer DLL and provenance after CI instead of discarding it.",
+      "source": "successful media workflow run 36986397572",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "medium; avoids rebuilding the same bridge before local/iPad packaging tests",
+      "dependency_unlocked": "direct reuse of a known compiled media bridge with SHA/provenance",
+      "implementation_cost": "low",
+      "risk": "low; artifact contains no House Party assets and remains time-limited",
+      "status": "implemented-building",
+      "experiment_performed": "Updated the media workflow to upload winegstreamer.dll plus a provenance JSON for 30 days.",
+      "measured_result": "Workflow run 36995735832 is the first artifact-preserving rebuild; result pending at register update time."
+    },
+    {
+      "id": "mac-four-backend-matrix",
+      "idea": "Expand the Mac CrossOver smoke matrix from DXMT/D3DMetal/wined3d to DXMT/D3DMetal/DXVK/wined3d.",
+      "source": "CodeWeavers CrossOver 26 advanced graphics settings",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "medium; prevents prematurely eliminating a Direct3D 11 backend and makes first-launch comparison complete",
+      "dependency_unlocked": "four-way launch/log comparison on the exact owned build",
+      "implementation_cost": "low",
+      "risk": "low; each backend uses an isolated bottle and derived game copy",
+      "status": "implemented-tested-static",
+      "experiment_performed": "Added DXVK bottle lane and its WINEDXVK switch, updated matrix aggregation and regression guard.",
+      "measured_result": "House Party host-check runs for commits 3cc7a658 and 214342f4 completed successfully; runtime comparison still needs Joey's Mac."
+    },
+    {
+      "id": "one-command-mac-cycle",
+      "idea": "Auto-discover the known owned House Party build/archive and run fingerprint, GPTK probe and the complete CrossOver smoke matrix in one command.",
+      "source": "reconciled historical paths plus current House Party tooling",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "high; removes repeated manual path/setup work and produces one evidence bundle per cycle",
+      "dependency_unlocked": "fresh compatibility manifest and Mac backend evidence as soon as a local Mac execution lane is available",
+      "implementation_cost": "low",
+      "risk": "low; archives/sources are only read, extraction and runtime work occur under derived Cenluma results/staging",
+      "status": "implemented-tested-static",
+      "experiment_performed": "Added tools/house-party/run-local-cycle.sh and a destructive-operation/syntax guard.",
+      "measured_result": "Initial host-check run at commit 61174b69 completed successfully; dedicated guard added in the next commit."
     }
   ]
 }
