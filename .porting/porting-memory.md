@@ -37,7 +37,8 @@ Wine/FEX/DXMT.
 
 - Fresh compatibility manifest from the owned current House Party build.
 - Exact House Party build/version and Unity version.
-- Fresh Mac translation result: launch/menu/gameplay/save/load and DXMT vs D3DMetal measurements.
+- Fresh Mac translation result: run `tools/house-party/mac-crossover-smoke.sh`
+  on Joey's Mac, then validate launch/menu/gameplay/save/load and DXMT vs D3DMetal.
 - Current physical-M4 iPad result on the October 2 Madeira base.
 - House Party-specific 64-bit video/audio result.
 - Sustained gameplay, save/load, performance and regression results.
