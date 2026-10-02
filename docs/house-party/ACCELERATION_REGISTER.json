@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-02T08:40:00Z",
+  "updated_at": "2026-10-02T08:56:00Z",
   "ranking_rule": "expected project time saved × probability of success × downstream tasks unlocked",
   "items": [
     {
@@ -51,9 +51,9 @@
       "dependency_unlocked": "64-bit Media Foundation/DirectShow calls can reach Madeira's FFmpeg/VideoToolbox/AudioToolbox unix side",
       "implementation_cost": "low",
       "risk": "low while opt-in",
-      "status": "implemented-awaiting-build",
-      "experiment_performed": "Added build/wine-pe/build-winegstreamer.sh, documentation, and source-level guard test.",
-      "measured_result": "packaging path exists and is isolated; binary/device runtime still needs an Apple build host"
+      "status": "implemented-compiled-awaiting-game-runtime",
+      "experiment_performed": "Added an isolated ARM64EC winegstreamer build/package path, corrected repo-root/toolchain probing after CI exposed it, then corrected final ARM64EC validation to require AMD64/ARM64 hybrid PE plus CHPE metadata.",
+      "measured_result": "macOS GitHub Actions run 36986397572 compiled and linked winegstreamer.dll successfully; CHPE/ARM64X structural validation and output verification passed. House Party video/audio runtime use is still unverified."
     },
     {
       "id": "owned-build-fingerprint",
@@ -106,6 +106,32 @@
       "status": "reject-until-new-hypothesis",
       "experiment_performed": "Reconciled prior repeated capture failure against separate runtime/JIT plumbing evidence.",
       "measured_result": "capture remains a validation subsystem, not the current runtime critical path"
+    },
+    {
+      "id": "mac-crossover-backend-matrix",
+      "idea": "Automate isolated Mac smoke runs across CrossOver DXMT, D3DMetal and wined3d without mutating the owned source or reusing a working bottle.",
+      "source": "CrossOver 26 graphics backend support and House Party DX11 baseline requirement",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "high once run locally; turns repeated manual backend setup/log capture into one reproducible matrix",
+      "dependency_unlocked": "fresh Mac launch evidence and a direct DXMT-versus-D3DMetal comparison",
+      "implementation_cost": "low",
+      "risk": "low; dedicated test bottles and derived source copy",
+      "status": "implemented-awaiting-local-mac-run",
+      "experiment_performed": "Added tools/house-party/mac-crossover-smoke.sh and a static CI guard.",
+      "measured_result": "automation committed; no fresh House Party Mac runtime result is claimed until the harness executes on Joey's Mac"
+    },
+    {
+      "id": "arm64ec-final-image-validator",
+      "idea": "Validate final ARM64EC DLLs using their AMD64/ARM64X PE identity plus CHPE metadata rather than treating the ARM64EC intermediate-object machine code as the final DLL machine.",
+      "source": "Microsoft Arm64EC PE/COFF behavior and LLVM COFF load-config inspection",
+      "date_discovered": "2026-10-02",
+      "expected_time_saved": "medium; prevents false build failures and unnecessary Wine debugging",
+      "dependency_unlocked": "trustworthy structural validation of the x64 media bridge",
+      "implementation_cost": "low",
+      "risk": "low",
+      "status": "keep",
+      "experiment_performed": "Real macOS CI linked the DLL, old validator rejected 0x8664, validator was changed to accept the final hybrid PE and require CHPEMetadata via llvm-readobj.",
+      "measured_result": "the next macOS CI run passed compile, CHPE verification and output verification"
     }
   ]
 }
