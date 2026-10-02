@@ -28,6 +28,8 @@ CXROOT="/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 [[ -x "$CXROOT/bin/wine" ]] || CXROOT="$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver"
 WINE="$CXROOT/bin/wine"; CXBOTTLE="$CXROOT/bin/cxbottle"; WINESERVER="$CXROOT/bin/wineserver"
 [[ -x "$WINE" && -x "$CXBOTTLE" ]] || { echo "CrossOver CLI not found" >&2; exit 3; }
+APP_ROOT="$(dirname "$(dirname "$(dirname "$CXROOT")")")"
+CROSSOVER_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_ROOT/Info.plist" 2>/dev/null || echo unknown)"
 
 BOTTLE_ROOT="${CX_BOTTLE_PATH:-$HOME/Library/Application Support/CrossOver/Bottles}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -101,9 +103,11 @@ run_backend() {
   stop_bottle "$dir"; start="$(date +%s)"
   (
     cd "$(dirname "$EXE")"
-    export WINEDEBUG="-all,+seh,+loaddll" DXMT_LOG_LEVEL=2
-    exec "$WINE" --bottle "$bottle" --scope private "$EXE"
-  ) >"$log" 2>&1 &
+    export CX_ROOT="$CXROOT" CX_BOTTLE="$bottle"
+    export CX_LOG="$log" CX_DEBUGMSG="+timestamp,+pid,+seh,+unwind,+process,+module,+loaddll"
+    export DXMT_LOG_LEVEL=2
+    exec "$WINE" --bottle "$bottle" "$EXE"
+  ) >"$RESULTS/${backend}-wrapper.log" 2>&1 &
   pid=$!
 
   for ((i=0; i<SECONDS; i++)); do
@@ -120,10 +124,11 @@ run_backend() {
   end="$(date +%s)"
 
   BACKEND_NAME="$backend" BOTTLE_NAME="$bottle" START="$start" END="$end" \
-  SURVIVED="$survived" RC="$rc" LOG_PATH="$log" python3 - "$meta" <<'PY'
+  SURVIVED="$survived" RC="$rc" LOG_PATH="$log" CROSSOVER_VERSION="$CROSSOVER_VERSION" python3 - "$meta" <<'PY'
 import json, os, sys
 d = {
  "backend": os.environ["BACKEND_NAME"], "bottle": os.environ["BOTTLE_NAME"],
+ "crossover_version": os.environ["CROSSOVER_VERSION"],
  "observation_seconds": int(os.environ["END"])-int(os.environ["START"]),
  "launcher_survived_observation_window": os.environ["SURVIVED"] == "true",
  "launcher_exit_code": None if os.environ["RC"] == "null" else int(os.environ["RC"]),
