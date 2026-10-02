@@ -180,6 +180,28 @@ for name in names:
         for line in sample:
             print("  " + line, file=sys.stderr)
         print("VC extraction diagnostic: DLL names found: " + ", ".join(available[:120]), file=sys.stderr)
+        print("VC extraction diagnostic: payload inventory:", file=sys.stderr)
+        seen = 0
+        for base_name in ("vc-burn-cabs", "vc-outer", "vc-expand"):
+            base = root / base_name
+            if not base.exists(): continue
+            for p in sorted(base.rglob("*")):
+                if not p.is_file(): continue
+                try:
+                    head = p.read_bytes()[:16]
+                    if head.startswith(b"MSCF"): kind = "CAB"
+                    elif head.startswith(b"\\xd0\\xcf\\x11\\xe0\\xa1\\xb1\\x1a\\xe1"): kind = "OLE/MSI"
+                    elif head.startswith(b"MZ"): kind = "PE"
+                    elif head.startswith(b"PK\\x03\\x04"): kind = "ZIP"
+                    elif head.lstrip().startswith(b"<"): kind = "XML/text"
+                    else: kind = head[:8].hex()
+                    rel = p.relative_to(root)
+                    print(f"  {rel} bytes={p.stat().st_size} kind={kind}", file=sys.stderr)
+                    seen += 1
+                    if seen >= 180: break
+                except OSError:
+                    pass
+            if seen >= 180: break
         raise SystemExit(f"missing signed x86_64 Microsoft runtime DLL: {name}")
     target = out / name
     shutil.copyfile(chosen, target)
