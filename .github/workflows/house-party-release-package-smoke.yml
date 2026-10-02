@@ -1,0 +1,62 @@
+name: House Party release package smoke
+
+on:
+  push:
+    branches: [joey-house-party-current]
+    paths:
+      - "tools/house-party/prepare-release-ipa.sh"
+      - "tests/host/check-house-party-release-package.py"
+      - ".github/workflows/house-party-release-package-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  assemble-without-game-files:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install extractor
+        run: brew install sevenzip
+
+      - name: Assemble derived test IPA locally on runner
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/Madeira-HouseParty-test.ipa"
+          HOUSE_PARTY_TEST_IPA="$OUT" bash tools/house-party/prepare-release-ipa.sh --output "$OUT"
+          test -s "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+
+      - name: Verify contents and absence of game files
+        run: |
+          set -euo pipefail
+          python3 - "$OUT" <<'PY'
+          import sys, zipfile
+          ipa = sys.argv[1]
+          required = {
+              "concrt140.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+              "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll", "vcamp140.dll",
+              "vccorlib140.dll", "vcomp140.dll", "vcruntime140.dll",
+              "vcruntime140_1.dll", "vcruntime140_threads.dll",
+          }
+          with zipfile.ZipFile(ipa) as z:
+              names = z.namelist()
+              vc = {n.rsplit("/", 1)[-1].lower() for n in names if "/x86_64-vcruntime/" in n}
+              missing = {x.lower() for x in required} - vc
+              assert not missing, sorted(missing)
+              assert any(n.endswith("/arm64ec-windows/winegstreamer.dll") for n in names)
+              assert "HousePartyOverlay/provenance.json" in names
+              bad = [n for n in names if n.lower().endswith("/houseparty.exe") or "houseparty_data/" in n.lower()]
+              assert not bad, bad[:10]
+              print("PASS: derived IPA has 12 VC runtime DLLs + media bridge and no House Party game files")
+          PY
+          shasum -a 256 "$OUT"
+          rm -f "$OUT"
+          test ! -e "$OUT"
+          echo "PASS: derived IPA deleted from runner; no package artifact uploaded"
