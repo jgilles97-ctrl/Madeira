@@ -179,7 +179,14 @@ for name in names:
                 d = p.read_bytes()
                 pe = struct.unpack_from("<I", d, 0x3c)[0] if len(d) >= 0x40 and d[:2] == b"MZ" else -1
                 machine = struct.unpack_from("<H", d, pe + 4)[0] if pe >= 0 and pe + 6 <= len(d) else -1
-                sample.append(f"{p}: bytes={len(d)} machine={machine:#x}")
+                cert_off = cert_size = -1
+                if pe >= 0 and pe + 26 <= len(d):
+                    magic = struct.unpack_from("<H", d, pe + 24)[0]
+                    dd = 112 if magic == 0x20b else 96 if magic == 0x10b else None
+                    if dd is not None and pe + 24 + dd + 40 <= len(d):
+                        cert_off, cert_size = struct.unpack_from("<II", d, pe + 24 + dd + 4 * 8)
+                import hashlib
+                sample.append(f"{p}: bytes={len(d)} machine={machine:#x} cert_off={cert_off:#x} cert_size={cert_size:#x} sha256={hashlib.sha256(d).hexdigest()}")
             except Exception as exc:
                 sample.append(f"{p}: {exc}")
         available = sorted({p.name for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".dll"})
