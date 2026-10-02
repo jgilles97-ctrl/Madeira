@@ -1,0 +1,48 @@
+name: House Party ARM64EC media build
+
+on:
+  push:
+    branches: [joey-house-party-current]
+    paths:
+      - "build/wine-pe/build-winegstreamer.sh"
+      - "wine"
+      - ".gitmodules"
+      - ".github/workflows/house-party-media-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm64ec-winegstreamer:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build prerequisite
+        run: |
+          brew install bison
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned llvm-mingw toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p toolchains
+          curl -fL --retry 3 \
+            https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/llvm-mingw-20260421-ucrt-macos-universal.tar.xz \
+            -o "$RUNNER_TEMP/llvm-mingw.tar.xz"
+          echo "bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7  $RUNNER_TEMP/llvm-mingw.tar.xz" | shasum -a 256 -c -
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C toolchains
+
+      - name: Build and package ARM64EC winegstreamer
+        run: bash build/wine-pe/build-winegstreamer.sh
+
+      - name: Verify output
+        run: |
+          set -euo pipefail
+          test -s app/Madeira/arm64ec-windows/winegstreamer.dll
+          file app/Madeira/arm64ec-windows/winegstreamer.dll
+          shasum -a 256 app/Madeira/arm64ec-windows/winegstreamer.dll
