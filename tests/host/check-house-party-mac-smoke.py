@@ -25,7 +25,7 @@ required = [
     'backend_evidence',
     'compatibility-manifest.json',
     'matrix.json',
-    'Process survival is diagnostic only; it does not prove render/menu/gameplay.',
+    'Process survival/backend selection is diagnostic only; it does not prove render/menu/gameplay.',
 ]
 for needle in required:
     assert needle in text, needle
