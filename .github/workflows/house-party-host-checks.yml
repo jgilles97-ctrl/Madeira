@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Python syntax
-        run: python3 -m py_compile tools/house-party/fingerprint.py tests/host/check-house-party-fingerprint.py tests/host/check-house-party-media.py tests/host/check-house-party-mac-smoke.py tests/host/check-house-party-local-cycle.py tests/host/check-house-party-session-stages.py tests/host/check-house-party-release-package.py tests/host/check-house-party-reconstruction-feasibility.py
+        run: python3 -m py_compile tools/house-party/fingerprint.py tests/host/check-house-party-fingerprint.py tests/host/check-house-party-media.py tests/host/check-house-party-mac-smoke.py tests/host/check-house-party-local-cycle.py tests/host/check-house-party-session-stages.py tests/host/check-house-party-release-package.py tests/host/check-house-party-reconstruction-feasibility.py tests/host/check-house-party-device-data.py
 
       - name: Read-only fingerprint fixture
         run: python3 tests/host/check-house-party-fingerprint.py
@@ -46,12 +46,16 @@ jobs:
       - name: Native reconstruction feasibility guard
         run: python3 tests/host/check-house-party-reconstruction-feasibility.py
 
+      - name: Physical-device data transfer guard
+        run: python3 tests/host/check-house-party-device-data.py
+
       - name: Shell syntax
         run: |
           bash -n tools/house-party/check-gptk4.sh
           bash -n tools/house-party/mac-crossover-smoke.sh
           bash -n tools/house-party/run-local-cycle.sh
           bash -n tools/house-party/prepare-release-ipa.sh
+          bash -n tools/house-party/device-data.sh
           bash -n build/wine-pe/build-winegstreamer.sh
 
       - name: Acceleration register schema
