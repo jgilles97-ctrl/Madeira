@@ -380,6 +380,16 @@ final class LibraryModel: ObservableObject {
     var blocksGameplayTouch: Bool { current != nil && (menu || launching) }
     private var timer: Timer?
     private var sawProcess = false
+    // Single-shot launch evidence. These make device logs usable even when
+    // CoreDevice screenshots/captures are unavailable.
+    private var stageProcessLogged = false
+    private var stageSurfaceLogged = false
+    private var stagePresentLogged = false
+    private func stageElapsedMS() -> Int { max(0, Int(Date().timeIntervalSince(launchStarted) * 1000)) }
+    private func logStage(_ stage: String, detail: String = "") {
+        let suffix = detail.isEmpty ? "" : " " + detail
+        fputs("[session-stage] stage=\(stage) elapsed_ms=\(stageElapsedMS())\(suffix)\n", stderr)
+    }
     // Why a session ended by itself (not Quit): the program the app launched
     // exited with a Windows error (wine_crash_exit_status, WineProcessBridge.m).
     // MADEIRA_EXIT_REPORT=0 returns to the library without a message.
@@ -701,6 +711,9 @@ final class LibraryModel: ObservableObject {
         launchDismissLogged = false
         DockStartScreen.shared.begin(dock, at: launchStarted)
         sawProcess = false
+        stageProcessLogged = false; stageSurfaceLogged = false; stagePresentLogged = false
+        let effectiveMedia64 = entry.media64Bit ?? MadeiraConfig.bool("env.MADEIRA_WG_64BIT", default: false)
+        logStage("begin", detail: "bits=\(entry.bits) api=\(entry.graphicsAPI ?? "unknown") media64=\(effectiveMedia64 ? 1 : 0) resolution=\(entry.resolution)")
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.poll() }
     }
@@ -711,21 +724,35 @@ final class LibraryModel: ObservableObject {
             // do not end this starting screen; the game's window does (DockStartScreen).
             dockStart.poll(self, rendered: madeira_get_present_count() >= launchPresent + 3)
         }
+        let presentNow = madeira_get_present_count()
+        let surfaceNow = winios_surface_present_count()
+        if surfaceNow > launchSurface && !stageSurfaceLogged {
+            stageSurfaceLogged = true
+            logStage("first-surface", detail: "delta=\(surfaceNow - launchSurface)")
+        }
+        if presentNow > launchPresent && !stagePresentLogged {
+            stagePresentLogged = true
+            logStage("first-present", detail: "delta=\(presentNow - launchPresent)")
+        }
         if dockStart.holding {
             if launching && !launchSlow && Date().timeIntervalSince(launchStarted) > 30 { launchSlow = true }
         } else if launching {
-            if madeira_get_present_count() >= launchPresent + 3 {
+            if presentNow >= launchPresent + 3 {
                 showGameView(reason: "present")
-            } else if winios_surface_present_count() > launchSurface {
+            } else if surfaceNow > launchSurface {
                 showGameView(reason: "surface")
             } else if Date().timeIntervalSince(launchStarted) > 30 { launchSlow = true }
         }
         if wine_process_is_running() != 0 {
             sawProcess = true
+            if !stageProcessLogged {
+                stageProcessLogged = true
+                logStage("process-running")
+            }
             if sessionMessage == "Starting…" { sessionMessage = "" }
         } else if sawProcess && wineserver_is_running() == 0 { finish() }
         // The first frame gives Aspect and Fill height the drawable's shape.
-        if current != nil, !laidOutAfterFirstPresent, madeira_get_present_count() != MetalBackedView.presentCountAtLaunch {
+        if current != nil, !laidOutAfterFirstPresent, presentNow != MetalBackedView.presentCountAtLaunch {
             laidOutAfterFirstPresent = true
             MetalBackedView.refreshDisplayMode(reason: "first-present")
         }
@@ -735,6 +762,8 @@ final class LibraryModel: ObservableObject {
     /// offers Enable JIT instead of only reporting.
     func launchFailed(_ reason: String? = nil, offerJIT: Bool = false) {
         guard current != nil && !sawProcess else { return }
+        let safeReason = (reason ?? "unspecified").replacingOccurrences(of: "\n", with: " ")
+        logStage("failed-before-process", detail: "reason=\(safeReason)")
         finish()
         if offerJIT, let reason { jitNotice = reason }
         else { error = reason ?? "The session could not start. Check the diagnostic log and JIT status." }
@@ -798,6 +827,7 @@ final class LibraryModel: ObservableObject {
         }
     }
     private func finish() {
+        logStage("end", detail: "process=\(sawProcess ? 1 : 0) surface=\(stageSurfaceLogged ? 1 : 0) present=\(stagePresentLogged ? 1 : 0)")
         if sawProcess, let report = exitReport() { error = report }
         timer?.invalidate(); timer = nil
         saveCurrentProfile()
