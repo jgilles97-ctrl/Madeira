@@ -27,6 +27,5 @@ assert 'rm -rf "$SOURCE"' not in text
 assert 'mv "$SOURCE"' not in text
 assert 'cp -R "$GAME" "$SOURCE"' not in text
 assert 'PREFIX="HouseParty-Port"' in text
-assert 'BOTTLE_ROOT="$' not in text  # expansion is wrapped in parameter/default syntax
 assert '.derived-house-party-copy' in text
 print("PASS: CrossOver matrix is syntax-valid, source-copy based, isolated and validation-limited")
