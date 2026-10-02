@@ -5,12 +5,12 @@
 # VideoToolbox and AudioToolbox. 64-bit games need this PE module present and
 # MADEIRA_WG_64BIT=1 to opt into that unix side.
 set -euo pipefail
-R="$(cd "$(dirname "\${BASH_SOURCE[0]}")/../.." && pwd)"
+R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TC="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
 B="$R/wine/build-arm64ec"
 OUT="$R/app/Madeira/arm64ec-windows/winegstreamer.dll"
 
-if [[ ! -x "$TC/arm64ec-w64-mingw32-gcc" ]]; then
+if [[ ! -x "$TC/arm64ec-w64-mingw32-clang" ]]; then
     echo "Missing llvm-mingw ARM64EC toolchain: $TC" >&2
     echo "See docs/BUILDING.md." >&2
     exit 2
