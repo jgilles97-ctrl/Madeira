@@ -147,7 +147,11 @@ root, out = Path(sys.argv[1]), Path(sys.argv[2])
 names = sys.argv[3:]
 rows = []
 for name in names:
-    candidates = [p for p in root.rglob("*") if p.is_file() and p.name.lower() == name.lower()]
+    expected = name.lower()
+    candidates = [
+        p for p in root.rglob("*") if p.is_file()
+        and p.name.lower() in {expected, expected + "_amd64"}
+    ]
     chosen = None
     for p in candidates:
         try:
@@ -165,7 +169,10 @@ for name in names:
         except (OSError, struct.error):
             continue
     if not chosen:
-        same_name = [p for p in root.rglob("*") if p.is_file() and p.name.lower() == name.lower()]
+        same_name = [
+            p for p in root.rglob("*") if p.is_file()
+            and p.name.lower() in {expected, expected + "_amd64"}
+        ]
         sample = []
         for p in same_name[:12]:
             try:
