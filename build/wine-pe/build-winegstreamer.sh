@@ -43,9 +43,21 @@ pe = struct.unpack_from("<I", d, 0x3c)[0]
 if d[pe:pe + 4] != b"PE\0\0":
     raise SystemExit("bad PE signature: " + p)
 machine = struct.unpack_from("<H", d, pe + 4)[0]
-if machine not in (0xA641, 0xAA64):
-    raise SystemExit("unexpected machine %#x; expected ARM64EC/ARM64" % machine)
-print("winegstreamer PE packaged:", p, "machine=%#x" % machine)
+# A final ARM64EC image is intentionally identified as AMD64 (0x8664) plus
+# ARM64X/CHPE metadata. 0xA641 is the intermediate COFF object identifier.
+if machine not in (0x8664, 0xAA64):
+    raise SystemExit("unexpected final PE machine %#x; expected AMD64/ARM64 hybrid image" % machine)
+print("winegstreamer PE header:", p, "machine=%#x" % machine)
 PY
+
+READOBJ="$TC/llvm-readobj"
+[[ -x "$READOBJ" ]] || { echo "Missing llvm-readobj in $TC" >&2; exit 4; }
+CHPE="$("$READOBJ" --coff-load-config "$OUT" 2>/dev/null || true)"
+if ! grep -q 'CHPEMetadata' <<<"$CHPE"; then
+    echo "winegstreamer lacks ARM64EC/ARM64X CHPE metadata" >&2
+    printf '%s\n' "$CHPE" >&2
+    exit 5
+fi
+echo "winegstreamer ARM64EC/ARM64X metadata verified"
 
 echo "64-bit media remains opt-in. For a test session set: env.MADEIRA_WG_64BIT = 1"
