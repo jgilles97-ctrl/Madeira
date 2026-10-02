@@ -18,6 +18,22 @@ are, unmodified, inside a single iOS app.
 > but performance and compatibility vary from game to game, and things change
 > quickly. Expect rough edges.
 
+## This fork: iPad / M-series compatibility lab
+
+This fork tracks upstream Madeira and adds reproducible compatibility tooling for
+M-series iPads. The first fork-specific addition is an offline diagnostic-log
+triage helper with tests and CI, designed to make M4/iPad failures easier to
+compare and report without changing the game runtime.
+
+- [iPad / M-series log triage guide](docs/IPAD_M4_TRIAGE.md)
+- `tools/madeira_log_triage.py` — read-only, dependency-free log summarizer
+- `tests/test_madeira_log_triage.py` — regression tests for known high-signal markers
+
+Upstream Madeira remains the source of the emulator/runtime implementation and
+should receive generally useful runtime fixes. This fork's compatibility tooling
+is explicitly experimental and does not claim that every flagged line identifies
+a root cause.
+
 ## How it works
 
 | Layer | What it does |
