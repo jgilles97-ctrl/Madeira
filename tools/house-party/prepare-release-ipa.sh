@@ -54,14 +54,43 @@ echo "Downloading latest supported Microsoft x64 VC++ redistributable..."
 VCEXE="$TMP/vc_redist.x64.exe"
 curl -fL --retry 3 "$VCREDIST_URL" -o "$VCEXE"
 VCEXE_SHA="$(shasum -a 256 "$VCEXE" | awk '{print $1}')"
-mkdir -p "$TMP/vc-outer" "$TMP/vc-files"
+mkdir -p "$TMP/vc-outer" "$TMP/vc-expand"
 7zz x "$VCEXE" "-o$TMP/vc-outer" -y >/dev/null
-found_cab=0
-while IFS= read -r -d "" candidate; do
-  found_cab=1
-  7zz x "$candidate" "-o$TMP/vc-files" -y >/dev/null 2>&1 || true
-done < <(find "$TMP/vc-outer" -type f -path '*CABINET*' -print0)
-(( found_cab )) || { echo "No CABINET payload found in Microsoft redistributable" >&2; exit 4; }
+
+# Microsoft's bootstrapper layout has changed across VC Redist releases. Do not
+# depend on .rsrc/1033/CABINET: recursively ask 7-Zip which embedded files are
+# archives/containers and expand them into isolated derived directories. The
+# final selector below still requires the exact DLL names, x86-64 PE machine and
+# an intact Authenticode certificate payload.
+VC_SEARCH_ROOT="$TMP/vc-outer"
+for round in 1 2 3; do
+  round_dir="$TMP/vc-expand/round-$round"
+  mkdir -p "$round_dir"
+  expanded=0
+  index=0
+  while IFS= read -r -d "" candidate; do
+    # Keep the recursion bounded and skip obvious final binaries. 7-Zip can
+    # inspect PE files too, which would otherwise create useless resource trees.
+    case "${candidate,,}" in
+      *.dll|*.exe) [[ "$candidate" == "$VCEXE" ]] && continue; [[ "$candidate" != "$VCEXE" ]] && continue;;
+    esac
+    ((index+=1))
+    dest="$round_dir/$index"
+    if 7zz l "$candidate" >/dev/null 2>&1; then
+      mkdir -p "$dest"
+      if 7zz x "$candidate" "-o$dest" -y >/dev/null 2>&1; then
+        ((expanded+=1))
+      else
+        rm -rf "$dest"
+      fi
+    fi
+  done < <(find "$VC_SEARCH_ROOT" -type f -size -128M -print0)
+  VC_SEARCH_ROOT="$TMP/vc-outer:$TMP/vc-expand"
+  # Colon-separated roots are only for our note above; the actual final search
+  # walks both directories. Stop early when no new container was expandable.
+  (( expanded > 0 )) || break
+done
+VC_FILES_ROOT="$TMP"
 
 PAYLOAD="$TMP/ipa"
 mkdir -p "$PAYLOAD"
@@ -72,7 +101,7 @@ VCDIR="$APP/x86_64-vcruntime"
 mkdir -p "$VCDIR"
 
 required=(concrt140.dll msvcp140.dll msvcp140_1.dll msvcp140_2.dll msvcp140_atomic_wait.dll msvcp140_codecvt_ids.dll vcamp140.dll vccorlib140.dll vcomp140.dll vcruntime140.dll vcruntime140_1.dll vcruntime140_threads.dll)
-python3 - "$TMP/vc-files" "$VCDIR" "${required[@]}" <<'PY'
+python3 - "$VC_FILES_ROOT" "$VCDIR" "${required[@]}" <<'PY'
 import shutil, struct, sys
 from pathlib import Path
 root, out = Path(sys.argv[1]), Path(sys.argv[2])
