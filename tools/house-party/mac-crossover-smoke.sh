@@ -83,7 +83,7 @@ stop_bottle() {
 }
 
 run_backend() {
-  local backend="$1" suffix bottle dir conf log meta pid start end rc=null survived=false
+  local backend="$1" suffix bottle dir conf log meta wrapper dxmt_dir pid start end rc=null survived=false
   case "$backend" in
     dxmt) suffix="DXMT";;
     d3dmetal) suffix="D3DMetal";;
@@ -93,6 +93,8 @@ run_backend() {
   esac
   bottle="${PREFIX}-${suffix}"; dir="$BOTTLE_ROOT/$bottle"; conf="$dir/cxbottle.conf"
   log="$RESULTS/${backend}.log"; meta="$RESULTS/${backend}.json"
+  wrapper="$RESULTS/${backend}-wrapper.log"; dxmt_dir="$RESULTS/${backend}-dxmt"
+  mkdir -p "$dxmt_dir"
   ensure_bottle "$bottle"
   cp "$conf" "$RESULTS/${backend}-cxbottle.before.conf"
   set_env_key "$conf" "CX_GRAPHICS_BACKEND" "$backend"
@@ -106,9 +108,11 @@ run_backend() {
     cd "$(dirname "$EXE")"
     export CX_ROOT="$CXROOT" CX_BOTTLE="$bottle"
     export CX_LOG="$log" CX_DEBUGMSG="+timestamp,+pid,+seh,+unwind,+process,+module,+loaddll"
-    export DXMT_LOG_LEVEL=2
+    # DXMT documents stderr logging plus optional per-module log files. These
+    # files are stronger evidence than merely requesting the DXMT backend.
+    export DXMT_LOG_LEVEL=info DXMT_LOG_PATH="$dxmt_dir"
     exec "$WINE" --bottle "$bottle" "$EXE"
-  ) >"$RESULTS/${backend}-wrapper.log" 2>&1 &
+  ) >"$wrapper" 2>&1 &
   pid=$!
 
   for ((i=0; i<SECONDS; i++)); do
@@ -125,18 +129,48 @@ run_backend() {
   end="$(date +%s)"
 
   BACKEND_NAME="$backend" BOTTLE_NAME="$bottle" START="$start" END="$end" \
-  SURVIVED="$survived" RC="$rc" LOG_PATH="$log" CROSSOVER_VERSION="$CROSSOVER_VERSION" python3 - "$meta" <<'PY'
-import json, os, sys
+  SURVIVED="$survived" RC="$rc" LOG_PATH="$log" WRAPPER_PATH="$wrapper" \
+  DXMT_DIR="$dxmt_dir" CROSSOVER_VERSION="$CROSSOVER_VERSION" python3 - "$meta" <<'PY'
+import json, os, pathlib, re, sys
+
+requested = os.environ["BACKEND_NAME"]
+paths = [pathlib.Path(os.environ["LOG_PATH"]), pathlib.Path(os.environ["WRAPPER_PATH"])]
+text = "\n".join(p.read_text(errors="replace") for p in paths if p.exists())
+dxmt_dir = pathlib.Path(os.environ["DXMT_DIR"])
+dxmt_files = sorted(str(p) for p in dxmt_dir.glob("*.log") if p.is_file() and p.stat().st_size)
+
+signals = {}
+if dxmt_files:
+    signals["dxmt"] = ["DXMT per-module log: " + p for p in dxmt_files[:8]]
+if re.search(r"(?im)(?:^|[^A-Za-z])(?:DXMT|winemetal)(?:[^A-Za-z]|$)", text):
+    signals.setdefault("dxmt", []).append("stderr/CX log contains DXMT or winemetal")
+if re.search(r"(?im)(?:D3DMetal(?:\.framework)?|\bD3DM\b|apple_gptk)", text):
+    signals.setdefault("d3dmetal", []).append("log contains D3DMetal/D3DM/apple_gptk")
+if re.search(r"(?im)(?:\bDXVK\b|MoltenVK|libMoltenVK)", text):
+    signals.setdefault("dxvk", []).append("log contains DXVK/MoltenVK")
+if re.search(r"(?im)\bwined3d\b", text):
+    signals.setdefault("wined3d", []).append("log contains wined3d")
+
+# Report a renderer only when the evidence is unambiguous. A configured backend
+# without a matching signature remains 'unknown', not a fabricated success.
+observed = next(iter(signals)) if len(signals) == 1 else None
+backend_match = (observed == requested) if observed is not None else None
+
 d = {
- "backend": os.environ["BACKEND_NAME"], "bottle": os.environ["BOTTLE_NAME"],
+ "backend_requested": requested,
+ "backend_observed": observed,
+ "backend_match": backend_match,
+ "backend_evidence": signals,
+ "bottle": os.environ["BOTTLE_NAME"],
  "crossover_version": os.environ["CROSSOVER_VERSION"],
  "observation_seconds": int(os.environ["END"])-int(os.environ["START"]),
  "launcher_survived_observation_window": os.environ["SURVIVED"] == "true",
  "launcher_exit_code": None if os.environ["RC"] == "null" else int(os.environ["RC"]),
  "log": os.environ["LOG_PATH"],
- "validation_limit": "Process survival is diagnostic only; it does not prove render/menu/gameplay."
+ "wrapper_log": os.environ["WRAPPER_PATH"],
+ "validation_limit": "Process survival/backend selection is diagnostic only; it does not prove render/menu/gameplay."
 }
-open(sys.argv[1],"w").write(json.dumps(d,indent=2)+"\n")
+open(sys.argv[1],"w").write(json.dumps(d,indent=2,sort_keys=True)+"\n")
 PY
   printf '%-9s survived=%-5s exit=%s\n' "$backend" "$survived" "$rc"
 }
