@@ -43,7 +43,9 @@ configured with `--enable-winegstreamer` (`build/wine-pe/build-ntdll.sh` does
 this for the arm64ec tree) and only the PE target is built.
 `build/wine-pe/build-winegstreamer.sh` builds exactly that target and copies it
 to `app/Madeira/arm64ec-windows/winegstreamer.dll`, which the app already
-packages with the ARM64EC DLL farm. A 32-bit
+packages with the ARM64EC DLL farm. Final ARM64EC DLLs identify as an AMD64/ARM64X hybrid PE;
+the build script verifies the ARM64EC/ARM64X CHPE metadata with `llvm-readobj`
+rather than expecting the ARM64EC intermediate-object machine code in the final DLL. A 32-bit
 (i386) build tree needs the same flag and must not skip `winegstreamer.dll`;
 the 32-bit processes that use this unix side get their `winegstreamer.dll`
 and `wmadmod.dll` from that tree.
