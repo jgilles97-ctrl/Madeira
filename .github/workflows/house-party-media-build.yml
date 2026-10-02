@@ -52,9 +52,36 @@ jobs:
           path: ${{ runner.temp }}/winegstreamer-build.log
           if-no-files-found: warn
 
-      - name: Verify output
+      - name: Verify output and record provenance
         run: |
           set -euo pipefail
-          test -s app/Madeira/arm64ec-windows/winegstreamer.dll
-          file app/Madeira/arm64ec-windows/winegstreamer.dll
-          shasum -a 256 app/Madeira/arm64ec-windows/winegstreamer.dll
+          DLL=app/Madeira/arm64ec-windows/winegstreamer.dll
+          test -s "$DLL"
+          file "$DLL"
+          HASH="$(shasum -a 256 "$DLL" | awk '{print $1}')"
+          WINE_SHA="$(git -C wine rev-parse HEAD)"
+          python3 - "$DLL" "$HASH" "$WINE_SHA" "$GITHUB_SHA" > "$RUNNER_TEMP/winegstreamer-provenance.json" <<'PY'
+          import json, os, sys
+          dll, sha256, wine_sha, repo_sha = sys.argv[1:]
+          print(json.dumps({
+              "schema_version": 1,
+              "artifact": os.path.basename(dll),
+              "sha256": sha256,
+              "wine_submodule_sha": wine_sha,
+              "madeira_repo_sha": repo_sha,
+              "runner_arch": os.uname().machine,
+              "purpose": "Open-source ARM64EC winegstreamer PE half for opt-in Madeira 64-bit media testing",
+              "contains_house_party_assets": False
+          }, indent=2, sort_keys=True))
+          PY
+          cat "$RUNNER_TEMP/winegstreamer-provenance.json"
+
+      - name: Preserve reusable media bridge
+        uses: actions/upload-artifact@v4
+        with:
+          name: house-party-winegstreamer-arm64ec
+          path: |
+            app/Madeira/arm64ec-windows/winegstreamer.dll
+            \${{ runner.temp }}/winegstreamer-provenance.json
+          if-no-files-found: error
+          retention-days: 30
