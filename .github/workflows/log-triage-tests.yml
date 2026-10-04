@@ -1,10 +1,14 @@
-name: Madeira log triage tests
+name: Madeira tooling tests
 
 on:
   push:
     paths:
       - "tools/madeira_log_triage.py"
       - "tests/test_madeira_log_triage.py"
+      - "tools/chicken_chase_preflight.py"
+      - "tests/host/check-chicken-chase-preflight.py"
+      - "tools/chicken_chase_preflight.py"
+      - "tests/host/check-chicken-chase-preflight.py"
       - ".github/workflows/log-triage-tests.yml"
   pull_request:
     paths:
@@ -27,6 +31,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile
-        run: python -m py_compile tools/madeira_log_triage.py tests/test_madeira_log_triage.py
-      - name: Unit tests
+        run: python -m py_compile tools/madeira_log_triage.py tests/test_madeira_log_triage.py tools/chicken_chase_preflight.py tests/host/check-chicken-chase-preflight.py
+      - name: Log triage unit tests
         run: python -m unittest discover -s tests -p "test_madeira_log_triage.py" -v
+      - name: Chicken Chase preflight checks
+        run: python tests/host/check-chicken-chase-preflight.py
