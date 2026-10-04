@@ -29,6 +29,20 @@ def test_renderer_priority() -> None:
     assert "WinMM" in result["audio"]
 
 
+def test_directdraw_recommendation() -> None:
+    pe = {"is_i386": True, "managed_dotnet": False}
+    api = mod.classify_api(["kernel32.dll", "user32.dll", "gdi32.dll", "ddraw.dll"])
+    risks = {
+        "writable_executable_sections": [],
+        "high_entropy_executable_sections": [],
+        "packed_or_smc_risk": False,
+    }
+    rec = mod.recommendation(pe, api, risks)
+    assert rec["profile"]["directdraw_baseline"] == "default Wine i386 ddraw path", rec
+    assert rec["profile"]["directdraw_fallback"] == "env.WINE_D3D_CONFIG = renderer=gdi", rec
+    assert any("no-3D/GDI" in warning for warning in rec["warnings"]), rec
+
+
 def test_d3d9_path() -> None:
     result = mod.classify_api(["kernel32.dll", "user32.dll", "d3d9.dll", "dsound.dll"])
     assert result["renderer"] == "Direct3D 9", result
@@ -119,6 +133,7 @@ def test_section_risk_flags() -> None:
 def main() -> int:
     tests = [
         test_renderer_priority,
+        test_directdraw_recommendation,
         test_d3d9_path,
         test_gdi_path,
         test_managed_warning,
