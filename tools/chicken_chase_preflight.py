@@ -351,6 +351,11 @@ def recommendation(pe: dict[str, Any], api: dict[str, Any], risks: dict[str, Any
             "DirectDraw is the highest-value compatibility experiment: test Madeira's existing "
             "Wine i386 ddraw path before writing any renderer replacement."
         )
+        warnings.append(
+            "If the default DirectDraw path launches but renders incorrectly, the next controlled "
+            "experiment is WineD3D no-3D/GDI mode: env.WINE_D3D_CONFIG = renderer=gdi. "
+            "Treat it as a diagnostic override and remove it after the comparison."
+        )
 
     profile: dict[str, Any] = {
         "resolution": "800x600",
@@ -366,6 +371,9 @@ def recommendation(pe: dict[str, Any], api: dict[str, Any], risks: dict[str, Any
 
     if api["renderer"] == "Direct3D 9":
         profile["d3d9"] = "default emulated frontend first; compare native only after baseline evidence"
+    elif api["renderer"] == "DirectDraw":
+        profile["directdraw_baseline"] = "default Wine i386 ddraw path"
+        profile["directdraw_fallback"] = "env.WINE_D3D_CONFIG = renderer=gdi"
 
     return {
         "blockers": blockers,
