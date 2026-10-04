@@ -83,9 +83,15 @@ Action:
 - test the existing Wine i386 DirectDraw path first
 - capture exact missing API/rendering failure before changing architecture
 - avoid writing a replacement renderer preemptively
-- if presentation is the only blocker, investigate the smallest bridge from Wine's DirectDraw/wined3d behavior to an already-supported Madeira presentation path
+- if the process/window is healthy but the default DirectDraw presentation is blank or corrupted, run one controlled fallback test with:
+  env.WINE_D3D_CONFIG = renderer=gdi
+- compare the same level/menu test, then remove the override after the experiment
+- only investigate a new presentation bridge if both the default path and Wine's no-3D/GDI path fail for a clearly identified reason
 
-DirectDraw is the most important unknown to collapse early.
+Why this fallback matters:
+current Wine still parses WINE_D3D_CONFIG before its registry settings, maps renderer=gdi (or no3d) to WINED3D_RENDERER_NO3D, and its no-3D adapter is explicitly named WineD3D DirectDraw Emulation with GDI DirectDraw capabilities. That gives old 2D titles a software path that does not require a functioning OpenGL/Vulkan 3D backend.
+
+DirectDraw is still the most important unknown to collapse early, but it no longer implies a renderer rewrite.
 
 #### Direct3D 8 / OpenGL / unknown
 
