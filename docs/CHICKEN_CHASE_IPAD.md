@@ -321,6 +321,41 @@ Action:
 - prefer the cleanest legitimate distribution/game executable
 - do not bypass licensing
 
+## Near-native polish already available upstream
+
+Current upstream Madeira has two features that fit Chicken Chase unusually well.
+
+### Home Screen launch
+
+Game details can produce a madeira://play?exe=... link. The Shortcuts app can turn that link into a Home Screen icon.
+
+Once Chicken Chase is in the Madeira library, this gives us a low-effort compatibility-build UX:
+
+Chicken Chase icon
+-> Madeira opens
+-> JIT flow runs if needed
+-> the exact Chicken Chase library entry starts
+
+That does not make it a standalone native executable, but it removes most of the launcher friction for daily use.
+
+### Save backup and restore
+
+Current upstream Madeira can export and restore Wine-user save data from:
+
+- Documents
+- Saved Games
+- AppData
+
+Historical Chicken Chase evidence points to an Application Data / AppData folder named Chicken Chase. If runtime tracing confirms that path, Madeira's current save-backup system should naturally include the game's progression without a Chicken-Chase-specific backup implementation.
+
+Acceptance requirement:
+- verify the actual save path after completing a level
+- export a Madeira save backup
+- confirm the Chicken Chase save files are present in the backup
+- restore into a controlled test prefix and verify progression survives
+
+These features are another reason current-upstream sync is mandatory before polishing the port.
+
 ## Native/no-JIT endgame lane
 
 Madeira is the fastest path to a playable original build, but it requires a sideloaded/JIT-capable environment.
