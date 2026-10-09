@@ -8,26 +8,93 @@
  *
  * A durable proof file is deliberately written by THIS x86-64 Windows process,
  * not by the iOS UI. The previous proof is deleted before any test runs, and a
- * new proof appears only after all three child canaries return success. This
- * lets Madeira distinguish "CI/build says it should work" from "this physical
- * iPad actually completed the local FEX -> Wine -> Vulkan -> Metal gate".
+ * new proof appears only after all three child canaries return success.
+ *
+ * The proof also fingerprints the exact four x64 Windows binaries used by this
+ * gate. Madeira recomputes the same fingerprint from the test payload bundled
+ * in the currently installed app. A proof from an older renderer/test build is
+ * therefore rejected automatically instead of silently unlocking Detroit.
  */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 #define GATE_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_V1"
-#define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V1"
+#define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"
 #define PROOF_PATH "C:\\madeira-detroit-vulkan-gate.txt"
 #define PROOF_TEMP_PATH "C:\\madeira-detroit-vulkan-gate.tmp"
+#define FNV64_OFFSET UINT64_C(14695981039346656037)
+#define FNV64_PRIME UINT64_C(1099511628211)
 
 typedef struct gate_stage {
     const char *name;
     const char *exe;
     DWORD timeout_ms;
 } gate_stage;
+
+static const char *const payload_names[] = {
+    "vulkan_probe.exe",
+    "vulkan_wsi_probe.exe",
+    "vulkan_swapchain_probe.exe",
+    "vulkan-device-gate-x64.exe",
+};
+
+static uint64_t fnv64_bytes(uint64_t hash, const unsigned char *data, size_t size)
+{
+    size_t i;
+    for (i = 0; i < size; ++i) {
+        hash ^= (uint64_t)data[i];
+        hash *= FNV64_PRIME;
+    }
+    return hash;
+}
+
+static int payload_fingerprint(uint64_t *out_hash)
+{
+    unsigned char buffer[64 * 1024];
+    uint64_t hash = FNV64_OFFSET;
+    size_t i;
+
+    for (i = 0; i < sizeof(payload_names) / sizeof(payload_names[0]); ++i) {
+        char path[MAX_PATH];
+        HANDLE file;
+        DWORD got;
+        const unsigned char separator = 0xffu;
+
+        hash = fnv64_bytes(hash, (const unsigned char *)payload_names[i], strlen(payload_names[i]));
+        hash = fnv64_bytes(hash, &separator, 1u);
+        snprintf(path, sizeof(path), "C:\\windows\\system32\\%s", payload_names[i]);
+        file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+        if (file == INVALID_HANDLE_VALUE) {
+            printf("PAYLOAD_HASH_RESULT=FAIL\n");
+            printf("PAYLOAD_HASH_ERROR=CreateFileA:%s:%lu\n", payload_names[i], (unsigned long)GetLastError());
+            return 10;
+        }
+
+        for (;;) {
+            if (!ReadFile(file, buffer, (DWORD)sizeof(buffer), &got, NULL)) {
+                DWORD err = GetLastError();
+                CloseHandle(file);
+                printf("PAYLOAD_HASH_RESULT=FAIL\n");
+                printf("PAYLOAD_HASH_ERROR=ReadFile:%s:%lu\n", payload_names[i], (unsigned long)err);
+                return 11;
+            }
+            if (!got) break;
+            hash = fnv64_bytes(hash, buffer, (size_t)got);
+        }
+        CloseHandle(file);
+    }
+
+    *out_hash = hash;
+    printf("PAYLOAD_FNV64=%016llx\n", (unsigned long long)hash);
+    printf("PAYLOAD_HASH_RESULT=PASS\n");
+    fflush(stdout);
+    return 0;
+}
 
 static void clear_stale_proof(void)
 {
@@ -36,20 +103,31 @@ static void clear_stale_proof(void)
     DeleteFileA(PROOF_PATH);
 }
 
-static int write_full_pass_proof(void)
+static int write_full_pass_proof(uint64_t payload_hash)
 {
-    static const char proof[] =
-        "SCHEMA=" PROOF_SCHEMA "\r\n"
+    char proof[1024];
+    int proof_len;
+    HANDLE file;
+    DWORD written = 0;
+    BOOL ok;
+
+    proof_len = snprintf(
+        proof, sizeof(proof),
+        "SCHEMA=%s\r\n"
         "ARCH=x86_64-windows\r\n"
         "EXECUTION=physical-device-local\r\n"
+        "PAYLOAD_FNV64=%016llx\r\n"
         "VULKAN_DEVICE=PASS\r\n"
         "WIN32_SURFACE=PASS\r\n"
         "PRESENTED_120_FRAMES=PASS\r\n"
         "OVERALL=PASS\r\n"
-        "NEXT_GATE=detroit-process-and-shader-compilation\r\n";
-    HANDLE file;
-    DWORD written = 0;
-    BOOL ok;
+        "NEXT_GATE=detroit-process-and-shader-compilation\r\n",
+        PROOF_SCHEMA, (unsigned long long)payload_hash);
+    if (proof_len <= 0 || (size_t)proof_len >= sizeof(proof)) {
+        printf("PROOF_RESULT=FAIL\n");
+        printf("PROOF_ERROR=format-overflow\n");
+        return 29;
+    }
 
     DeleteFileA(PROOF_TEMP_PATH);
     file = CreateFileA(PROOF_TEMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -60,8 +138,8 @@ static int write_full_pass_proof(void)
         return 30;
     }
 
-    ok = WriteFile(file, proof, (DWORD)(sizeof(proof) - 1u), &written, NULL);
-    if (!ok || written != (DWORD)(sizeof(proof) - 1u)) {
+    ok = WriteFile(file, proof, (DWORD)proof_len, &written, NULL);
+    if (!ok || written != (DWORD)proof_len) {
         DWORD err = GetLastError();
         CloseHandle(file);
         DeleteFileA(PROOF_TEMP_PATH);
@@ -69,7 +147,7 @@ static int write_full_pass_proof(void)
         printf("PROOF_ERROR=WriteFile:%lu:%lu/%lu\n",
                (unsigned long)err,
                (unsigned long)written,
-               (unsigned long)(sizeof(proof) - 1u));
+               (unsigned long)proof_len);
         return 31;
     }
 
@@ -95,6 +173,7 @@ static int write_full_pass_proof(void)
 
     printf("PROOF_PATH=%s\n", PROOF_PATH);
     printf("PROOF_SCHEMA=%s\n", PROOF_SCHEMA);
+    printf("PROOF_PAYLOAD_FNV64=%016llx\n", (unsigned long long)payload_hash);
     printf("PROOF_RESULT=PASS\n");
     fflush(stdout);
     return 0;
@@ -175,6 +254,7 @@ int main(void)
         { "win32-surface",  "vulkan_wsi_probe.exe",       60000 },
         { "present-120",    "vulkan_swapchain_probe.exe", 180000 },
     };
+    uint64_t payload_hash = 0;
     size_t i;
 
     clear_stale_proof();
@@ -184,6 +264,15 @@ int main(void)
     printf("PURPOSE=prove-local-FEX-Wine-Vulkan-MoltenVK-Metal-path-before-Detroit\n");
     printf("STALE_PROOF_CLEARED=1\n");
     fflush(stdout);
+
+    if (payload_fingerprint(&payload_hash) != 0) {
+        printf("OVERALL=FAIL\n");
+        printf("FAILED_GATE=payload-fingerprint\n");
+        printf("PROOF_RESULT=NOT_WRITTEN\n");
+        printf("NEXT_ACTION=repair-device-gate-payload-before-launching-Detroit\n");
+        fflush(stdout);
+        return 12;
+    }
 
     for (i = 0; i < sizeof(stages) / sizeof(stages[0]); ++i) {
         int rc = run_stage(&stages[i]);
@@ -208,7 +297,7 @@ int main(void)
     /* Proof publication is part of the gate. A test that rendered correctly but
      * cannot persist its evidence does NOT advance the project automatically. */
     {
-        int proof_rc = write_full_pass_proof();
+        int proof_rc = write_full_pass_proof(payload_hash);
         if (proof_rc != 0) {
             printf("OVERALL=FAIL\n");
             printf("FAILED_GATE=proof-publication\n");
