@@ -70,10 +70,22 @@ def main() -> int:
     ap.add_argument("--farm", type=pathlib.Path, required=True)
     ap.add_argument("--moltenvk", type=pathlib.Path, required=True)
     ap.add_argument("--strict", action="store_true")
+    ap.add_argument(
+        "--expected-moltenvk-commit",
+        default=EXPECTED_MOLTENVK_COMMIT,
+        help=(
+            "Exact audited MoltenVK commit expected in BUILD-INFO.txt. "
+            "Defaults to Detroit Release003. A deliberate fork upgrade must pass its reviewed commit explicitly."
+        ),
+    )
     args = ap.parse_args()
 
     failures: list[str] = []
     warnings: list[str] = []
+
+    expected_commit = args.expected_moltenvk_commit.strip().lower()
+    if not expected_commit or len(expected_commit) != 40 or any(c not in "0123456789abcdef" for c in expected_commit):
+        failures.append("expected MoltenVK commit must be a full 40-character hexadecimal Git commit")
 
     # Wine-facing Vulkan modules run natively as ARM64EC inside Madeira.
     for name in ARM64EC_MODULES:
@@ -102,7 +114,7 @@ def main() -> int:
         source = info.get("source")
         release = info.get("release")
         ref = info.get("ref")
-        commit = info.get("commit")
+        commit = (info.get("commit") or "").lower() or None
         print(
             "INFO MoltenVK "
             f"source={source or 'unknown'} release={release or 'unknown'} "
@@ -113,16 +125,19 @@ def main() -> int:
                 f"MoltenVK source identity is {source!r}, expected {EXPECTED_MOLTENVK_REPO!r}"
             )
         if release != EXPECTED_MOLTENVK_RELEASE:
-            failures.append(
-                f"MoltenVK release label is {release!r}, expected {EXPECTED_MOLTENVK_RELEASE!r}"
-            )
-        if commit != EXPECTED_MOLTENVK_COMMIT:
-            failures.append(
-                f"MoltenVK commit is {commit!r}, expected audited Release003 commit {EXPECTED_MOLTENVK_COMMIT}"
-            )
-        if ref != EXPECTED_MOLTENVK_COMMIT:
             warnings.append(
-                f"MoltenVK checkout ref is {ref!r}; normal Detroit builds pin the audited commit directly"
+                f"MoltenVK release label is {release!r}, baseline label is {EXPECTED_MOLTENVK_RELEASE!r}"
+            )
+        if commit != expected_commit:
+            failures.append(
+                f"MoltenVK commit is {commit!r}, expected explicitly audited commit {expected_commit!r}"
+            )
+        # A ref may be a human-friendly tag while the commit is immutable. The
+        # commit is the security/reproducibility boundary; make a non-SHA ref
+        # visible without rejecting it once the exact commit has been approved.
+        if ref and ref.lower() != expected_commit:
+            warnings.append(
+                f"MoltenVK checkout ref is {ref!r}; exact commit proof comes from BUILD-INFO commit={commit or 'unknown'}"
             )
     else:
         failures.append("MoltenVK BUILD-INFO.txt missing; exact source identity cannot be proved")
