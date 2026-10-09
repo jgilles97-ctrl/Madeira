@@ -6,10 +6,12 @@ on:
       - "tools/huniecam_probe.py"
       - "tools/huniecam_session_triage.py"
       - "tools/huniecam_save_probe.py"
+      - "tools/huniecam_acceptance.py"
       - "tools/madeira_log_triage.py"
       - "tests/test_huniecam_probe.py"
       - "tests/test_huniecam_session_triage.py"
       - "tests/test_huniecam_save_probe.py"
+      - "tests/test_huniecam_acceptance.py"
       - "tests/test_madeira_log_triage.py"
       - ".github/workflows/huniecam-ipad-compat.yml"
   pull_request:
@@ -17,10 +19,12 @@ on:
       - "tools/huniecam_probe.py"
       - "tools/huniecam_session_triage.py"
       - "tools/huniecam_save_probe.py"
+      - "tools/huniecam_acceptance.py"
       - "tools/madeira_log_triage.py"
       - "tests/test_huniecam_probe.py"
       - "tests/test_huniecam_session_triage.py"
       - "tests/test_huniecam_save_probe.py"
+      - "tests/test_huniecam_acceptance.py"
       - "tests/test_madeira_log_triage.py"
       - ".github/workflows/huniecam-ipad-compat.yml"
 
@@ -44,10 +48,12 @@ jobs:
           tools/huniecam_probe.py
           tools/huniecam_session_triage.py
           tools/huniecam_save_probe.py
+          tools/huniecam_acceptance.py
           tools/madeira_log_triage.py
           tests/test_huniecam_probe.py
           tests/test_huniecam_session_triage.py
           tests/test_huniecam_save_probe.py
+          tests/test_huniecam_acceptance.py
           tests/test_madeira_log_triage.py
       - name: Run title preflight tests
         run: python -m unittest tests.test_huniecam_probe -v
@@ -55,5 +61,7 @@ jobs:
         run: python -m unittest tests.test_huniecam_session_triage -v
       - name: Run save persistence tests
         run: python -m unittest tests.test_huniecam_save_probe -v
+      - name: Run acceptance gate tests
+        run: python -m unittest tests.test_huniecam_acceptance -v
       - name: Run generic log triage regression tests
         run: python -m unittest tests.test_madeira_log_triage -v
