@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Create a deterministic identity for one HunieCam/Madeira launch evidence set.
 
-Cycle 6 closes a provenance gap left after build/profile locking: two launches can
-use the same owned binary and the same settings but still produce different logs.
-A run context hashes the exact structured session, exact run record and exact
-Madeira/Unity log text. Downstream tools can then refuse evidence accidentally
-mixed across separate launches. A small stage summary is exposed for repeatability
-checks without embedding raw logs.
+Cycle 6 run-context V2 seals the exact build/profile, structured session, run
+record, config-guard report, performance report, and Madeira/Unity log contents.
+This prevents a PASS guard or clean performance report from another launch being
+substituted into otherwise matching evidence. No raw logs or private paths are
+embedded.
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_RUN_CONTEXT_V1"
+SCHEMA = "MADEIRA_HUNIECAM_RUN_CONTEXT_V2"
 
 
 def _sha_bytes(data: bytes) -> str:
@@ -30,13 +29,7 @@ def _sha_json(value: Any) -> str:
 
 def text_descriptor(text: str, kind: str) -> dict[str, Any]:
     encoded = text.encode("utf-8", errors="replace")
-    return {
-        "kind": kind,
-        "present": bool(text.strip()),
-        "chars": len(text),
-        "lines": len(text.splitlines()),
-        "text_sha256": _sha_bytes(encoded),
-    }
+    return {"kind": kind, "present": bool(text.strip()), "chars": len(text), "lines": len(text.splitlines()), "text_sha256": _sha_bytes(encoded)}
 
 
 def build(
@@ -44,36 +37,33 @@ def build(
     session: dict[str, Any] | None,
     madeira_text: str,
     unity_text: str,
+    guard: dict[str, Any] | None = None,
+    performance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
-    record = run_record or {}
-    sess = session or {}
+    record = run_record or {}; sess = session or {}; guard_data = guard or {}; perf = performance or {}
     build_obj = record.get("build") if isinstance(record.get("build"), dict) else {}
-    build_fp = build_obj.get("fingerprint_sha256")
-    profile_fp = record.get("profile_sha256")
-    if record.get("schema") != "MADEIRA_HUNIECAM_RUN_RECORD_V1":
-        errors.append(f"Unsupported/missing run record schema: {record.get('schema')!r}")
-    if not record.get("ready_for_comparison"):
-        errors.append("Run record is not provenance-ready.")
-    if not str(sess.get("schema", "")).startswith("MADEIRA_HUNIECAM_SESSION_V"):
-        errors.append(f"Unsupported/missing HunieCam session schema: {sess.get('schema')!r}")
-    if not build_fp:
-        errors.append("Owned-build fingerprint is missing.")
-    if not profile_fp:
-        errors.append("Launch-profile fingerprint is missing.")
+    build_fp = build_obj.get("fingerprint_sha256"); profile_fp = record.get("profile_sha256")
+    if record.get("schema") != "MADEIRA_HUNIECAM_RUN_RECORD_V1": errors.append(f"Unsupported/missing run record schema: {record.get('schema')!r}")
+    if not record.get("ready_for_comparison"): errors.append("Run record is not provenance-ready.")
+    if not str(sess.get("schema", "")).startswith("MADEIRA_HUNIECAM_SESSION_V"): errors.append(f"Unsupported/missing HunieCam session schema: {sess.get('schema')!r}")
+    if guard_data and not str(guard_data.get("schema", "")).startswith("MADEIRA_HUNIECAM_CONFIG_GUARD_V"): errors.append(f"Unsupported guard schema: {guard_data.get('schema')!r}")
+    if perf and not str(perf.get("schema", "")).startswith("MADEIRA_HUNIECAM_PERFORMANCE_V"): errors.append(f"Unsupported performance schema: {perf.get('schema')!r}")
+    if not build_fp: errors.append("Owned-build fingerprint is missing.")
+    if not profile_fp: errors.append("Launch-profile fingerprint is missing.")
 
-    madeira = text_descriptor(madeira_text, "madeira_log")
-    unity = text_descriptor(unity_text, "unity_log")
-    if not madeira["present"]:
-        errors.append("Madeira log is required to identify a launch.")
+    madeira = text_descriptor(madeira_text, "madeira_log"); unity = text_descriptor(unity_text, "unity_log")
+    if not madeira["present"]: errors.append("Madeira log is required to identify a launch.")
 
-    session_sha = _sha_json(sess) if sess else None
-    record_sha = _sha_json(record) if record else None
+    session_sha = _sha_json(sess) if sess else None; record_sha = _sha_json(record) if record else None
+    guard_sha = _sha_json(guard_data) if guard_data else None; perf_sha = _sha_json(perf) if perf else None
     material = {
         "build_fingerprint_sha256": build_fp,
         "profile_sha256": profile_fp,
         "session_sha256": session_sha,
         "run_record_sha256": record_sha,
+        "guard_sha256": guard_sha,
+        "performance_sha256": perf_sha,
         "madeira_log_text_sha256": madeira["text_sha256"],
         "unity_log_text_sha256": unity["text_sha256"] if unity["present"] else None,
     }
@@ -81,31 +71,16 @@ def build(
     failure_codes = sorted({str(x.get("code")) for x in sess.get("failures", []) if isinstance(x, dict) and x.get("code")})
     marker_codes = sorted({str(x.get("code")) for x in sess.get("markers", []) if isinstance(x, dict) and x.get("code")})
     return {
-        "schema": SCHEMA,
-        "title": "HunieCam Studio",
-        "steam_app_id": 426000,
-        "run_id_sha256": run_id,
-        "build_fingerprint_sha256": build_fp,
-        "profile_sha256": profile_fp,
-        "session_sha256": session_sha,
-        "run_record_sha256": record_sha,
-        "session_summary": {
-            "schema": sess.get("schema"),
-            "deepest_stage": int(sess.get("deepest_stage", 0)) if sess else 0,
-            "deepest_stage_name": sess.get("deepest_stage_name"),
-            "failure_codes": failure_codes,
-            "marker_codes": marker_codes,
-        },
-        "logs": {"madeira": madeira, "unity": unity},
-        "material": material,
-        "ready": not errors,
-        "errors": errors,
-        "privacy": {
-            "raw_log_text_embedded": False,
-            "absolute_paths_embedded": False,
-            "credentials_embedded": False,
-        },
-        "rule": "Evidence from another launch must not be substituted merely because the EXE and settings match. The run ID binds this exact structured session, run record and log pair to this exact owned build/profile.",
+        "schema": SCHEMA, "title": "HunieCam Studio", "steam_app_id": 426000,
+        "run_id_sha256": run_id, "build_fingerprint_sha256": build_fp, "profile_sha256": profile_fp,
+        "session_sha256": session_sha, "run_record_sha256": record_sha, "guard_sha256": guard_sha, "performance_sha256": perf_sha,
+        "session_summary": {"schema": sess.get("schema"), "deepest_stage": int(sess.get("deepest_stage", 0)) if sess else 0, "deepest_stage_name": sess.get("deepest_stage_name"), "failure_codes": failure_codes, "marker_codes": marker_codes},
+        "guard_summary": {"schema": guard_data.get("schema"), "status": guard_data.get("status"), "experiment": guard_data.get("experiment")} if guard_data else None,
+        "performance_summary": {"schema": perf.get("schema"), "comparison_clean": perf.get("comparison_clean"), "fps_cap": perf.get("fps_cap")} if perf else None,
+        "logs": {"madeira": madeira, "unity": unity}, "material": material,
+        "ready": not errors, "errors": errors,
+        "privacy": {"raw_log_text_embedded": False, "absolute_paths_embedded": False, "credentials_embedded": False},
+        "rule": "The run ID seals this launch's exact session, profile, guard, performance and log evidence. Do not substitute evidence from another launch even when the EXE/settings look identical.",
     }
 
 
@@ -113,23 +88,20 @@ def _read(path: pathlib.Path | None) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path else ""
 
 
+def _load(path: pathlib.Path | None) -> dict[str, Any] | None:
+    return json.loads(path.read_text(encoding="utf-8")) if path else None
+
+
 def main() -> int:
-    p = argparse.ArgumentParser(description="Create one HunieCam launch run-context identity")
-    p.add_argument("--run-record", type=pathlib.Path, required=True)
-    p.add_argument("--session", type=pathlib.Path, required=True)
-    p.add_argument("--madeira-log", type=pathlib.Path, required=True)
-    p.add_argument("--unity-log", type=pathlib.Path)
-    p.add_argument("--json", dest="json_path", type=pathlib.Path)
+    p = argparse.ArgumentParser(description="Create one sealed HunieCam launch run-context identity")
+    p.add_argument("--run-record", type=pathlib.Path, required=True); p.add_argument("--session", type=pathlib.Path, required=True)
+    p.add_argument("--guard", type=pathlib.Path); p.add_argument("--performance", type=pathlib.Path)
+    p.add_argument("--madeira-log", type=pathlib.Path, required=True); p.add_argument("--unity-log", type=pathlib.Path); p.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = p.parse_args()
-    record = json.loads(args.run_record.read_text(encoding="utf-8"))
-    session = json.loads(args.session.read_text(encoding="utf-8"))
-    report = build(record, session, _read(args.madeira_log), _read(args.unity_log))
+    report = build(_load(args.run_record), _load(args.session), _read(args.madeira_log), _read(args.unity_log), _load(args.guard), _load(args.performance))
     rendered = json.dumps(report, indent=2, sort_keys=True)
-    if args.json_path:
-        args.json_path.write_text(rendered + "\n", encoding="utf-8")
-    print(rendered)
-    return 0 if report["ready"] else 2
+    if args.json_path: args.json_path.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered); return 0 if report["ready"] else 2
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__": raise SystemExit(main())
