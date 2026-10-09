@@ -16,7 +16,7 @@ SCHEMA = "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V1"
 SUPPORTED = {
     "preflight": {"MADEIRA_HUNIECAM_PROBE_V3", "MADEIRA_HUNIECAM_PROBE_V4"},
     "session": {"MADEIRA_HUNIECAM_SESSION_V2"},
-    "guard": {"MADEIRA_HUNIECAM_CONFIG_GUARD_V1"},
+    "guard": {"MADEIRA_HUNIECAM_CONFIG_GUARD_V1", "MADEIRA_HUNIECAM_CONFIG_GUARD_V2"},
     "performance": {"MADEIRA_HUNIECAM_PERFORMANCE_V1", "MADEIRA_HUNIECAM_PERFORMANCE_V2"},
     "run_record": {"MADEIRA_HUNIECAM_RUN_RECORD_V1"},
     "acceptance": {"MADEIRA_HUNIECAM_ACCEPTANCE_V2", "MADEIRA_HUNIECAM_ACCEPTANCE_V3", "MADEIRA_HUNIECAM_ACCEPTANCE_V4"},
@@ -78,7 +78,8 @@ def validate(
         session_hash = embedded_identity.get("exe_sha256")
         if session_hash and owned_hash and session_hash != owned_hash:
             errors.append("Session embedded executable hash does not match the supplied preflight.")
-        if not session.get("evidence", {}).get("madeira_log_present", False) if isinstance(session.get("evidence"), dict) else False:
+        evidence = session.get("evidence") if isinstance(session.get("evidence"), dict) else {}
+        if not evidence.get("madeira_log_present", False):
             warnings.append("Session report does not prove a Madeira log was present.")
 
     if guard:
