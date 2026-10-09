@@ -8,10 +8,12 @@ BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
 WINE_BUILD="$WINE_SRC/build-macos"
-NTDLL_SHIMS="$REPO_ROOT/build/ntdll-unix/shims"
+NTDLL_DIR="$REPO_ROOT/build/ntdll-unix"
+NTDLL_SHIMS="$NTDLL_DIR/shims"
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 APP_LIB="$REPO_ROOT/app/Madeira/libwin32u_unix.a"
+PYTHON="${PYTHON:-python3}"
 
 mkdir -p "$OBJ_DIR"
 
@@ -23,6 +25,7 @@ FREETYPE_DIR="$REPO_ROOT/build/freetype-ios"
 MOLTENVK_PREFIX="${MOLTENVK_IOS_PREFIX:-$REPO_ROOT/toolchains/moltenvk-detroit-ios}"
 VULKAN_MODE="${MADEIRA_VULKAN:-auto}"
 VULKAN_ENABLED=0
+VULKAN_DRIVER_SOURCE="$BUILD_DIR/driver_ios.c"
 
 # Detroit path: opt in automatically once the iOS MoltenVK archive produced by
 # build/moltenvk-ios/build.sh is present. MADEIRA_VULKAN=0 forces the historical
@@ -40,6 +43,15 @@ if [ "$VULKAN_MODE" != "0" ]; then
     fi
 fi
 
+# Never let a prior Vulkan-enabled run leak Detroit-only objects into a later
+# disabled build. The final archive gathers normal win32u objects by wildcard,
+# so these must be removed before configuration is evaluated.
+rm -f \
+    "$OBJ_DIR/vulkan_static_ios.o" \
+    "$OBJ_DIR/vulkan_driver_ios.o" \
+    "$OBJ_DIR/vulkan_surface_ios.o" \
+    "$OBJ_DIR/driver_ios_vulkan.c"
+
 compile_one() {
     local src=$1
     local name=$2
@@ -51,7 +63,7 @@ compile_one() {
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing \
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$BUILD_DIR/config_ios.h" \
-        -include "$REPO_ROOT/build/ntdll-unix/shims/wine_ios_exit.h" \
+        -include "$NTDLL_SHIMS/wine_ios_exit.h" \
         -I"$BUILD_DIR" \
         -I"$WINE_BUILD/include" \
         -I"$NTDLL_SHIMS" \
@@ -81,13 +93,21 @@ compile_one() {
 
 echo "=== Building win32u unix (iOS) ==="
 
-# Keep the large iOS driver source close to upstream and inject only the weak
-# pVulkanInit slot assignment. The patcher fails if its exact anchors drift.
-PATCHED_DRIVER="$OBJ_DIR/driver_ios_vulkan.c"
-python3 "$BUILD_DIR/patch_driver_vulkan.py" "$BUILD_DIR/driver_ios.c" "$PATCHED_DRIVER"
-
 if [ "$VULKAN_ENABLED" -eq 1 ]; then
     echo "Vulkan: static MoltenVK ENABLED ($MOLTENVK_PREFIX)"
+
+    # Generate a Vulkan-enabled copy of driver_ios.c only for this build. The
+    # generated source uses a strong pVulkanInit reference, which forces the
+    # static linker to include the iOS user-driver instead of silently falling
+    # back to Wine's headless/null Vulkan driver.
+    if ! command -v "$PYTHON" >/dev/null 2>&1; then
+        echo "error: Python is required to generate the Vulkan driver wiring" >&2
+        exit 3
+    fi
+    VULKAN_DRIVER_SOURCE="$OBJ_DIR/driver_ios_vulkan.c"
+    "$PYTHON" "$BUILD_DIR/patch_driver_vulkan.py" \
+        "$BUILD_DIR/driver_ios.c" "$VULKAN_DRIVER_SOURCE"
+
     # Strong references from this object to vkGet*ProcAddr force the matching
     # MoltenVK archive members into the final app link. Wine's vulkan.c itself
     # continues to use its normal dlfcn-shaped interface through the preinclude
@@ -97,10 +117,10 @@ if [ "$VULKAN_ENABLED" -eq 1 ]; then
 
     # Shared HWND -> CAMetalLayer lifetime adapter plus the Wine user-driver
     # callbacks that translate VK_KHR_win32_surface to VK_EXT_metal_surface.
-    compile_one "$REPO_ROOT/build/ntdll-unix/vulkan_surface_ios.c" "vulkan_surface_ios" \
-        -I"$REPO_ROOT/build/ntdll-unix"
+    compile_one "$NTDLL_DIR/vulkan_surface_ios.c" "vulkan_surface_ios" \
+        -I"$NTDLL_DIR"
     compile_one "$BUILD_DIR/vulkan_driver_ios.c" "vulkan_driver_ios" \
-        -I"$REPO_ROOT/build/ntdll-unix" \
+        -I"$NTDLL_DIR" \
         -I"$MOLTENVK_PREFIX/include"
 else
     echo "Vulkan: disabled (build MoltenVK first, or set MADEIRA_VULKAN=1 to require it)"
@@ -138,7 +158,7 @@ for src in $WINE_SRC/dlls/win32u/*.c $WINE_SRC/dlls/win32u/dibdrv/*.c; do
             continue
             ;;
         driver)
-            compile_one "$PATCHED_DRIVER" "driver"
+            compile_one "$VULKAN_DRIVER_SOURCE" "driver"
             continue
             ;;
         message)
