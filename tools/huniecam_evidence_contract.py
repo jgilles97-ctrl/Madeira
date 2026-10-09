@@ -3,13 +3,13 @@
 
 Contract V4 validates Run Context V2 hashes for session, run record, guard,
 performance, owned-EXE import audit and owned native-module audit. Legacy
-artifacts remain readable for diagnosis but cannot satisfy final Cycle 6 gates.
+artifacts remain readable for diagnosis but cannot satisfy final current gates.
 """
 from __future__ import annotations
 import argparse, hashlib, json, pathlib
 from typing import Any
 SCHEMA="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4"
-SUPPORTED={"preflight":{"MADEIRA_HUNIECAM_PROBE_V3","MADEIRA_HUNIECAM_PROBE_V4"},"session":{"MADEIRA_HUNIECAM_SESSION_V2","MADEIRA_HUNIECAM_SESSION_V3"},"guard":{"MADEIRA_HUNIECAM_CONFIG_GUARD_V1","MADEIRA_HUNIECAM_CONFIG_GUARD_V2"},"performance":{"MADEIRA_HUNIECAM_PERFORMANCE_V1","MADEIRA_HUNIECAM_PERFORMANCE_V2"},"run_record":{"MADEIRA_HUNIECAM_RUN_RECORD_V1"},"run_context":{"MADEIRA_HUNIECAM_RUN_CONTEXT_V1","MADEIRA_HUNIECAM_RUN_CONTEXT_V2"},"pe_imports":{"MADEIRA_HUNIECAM_PE_IMPORTS_V1"},"native_modules":{"MADEIRA_HUNIECAM_NATIVE_MODULES_V1"},"acceptance":{"MADEIRA_HUNIECAM_ACCEPTANCE_V2","MADEIRA_HUNIECAM_ACCEPTANCE_V3","MADEIRA_HUNIECAM_ACCEPTANCE_V4","MADEIRA_HUNIECAM_ACCEPTANCE_V5","MADEIRA_HUNIECAM_ACCEPTANCE_V6","MADEIRA_HUNIECAM_ACCEPTANCE_V7","MADEIRA_HUNIECAM_ACCEPTANCE_V8"}}
+SUPPORTED={"preflight":{"MADEIRA_HUNIECAM_PROBE_V3","MADEIRA_HUNIECAM_PROBE_V4"},"session":{"MADEIRA_HUNIECAM_SESSION_V2","MADEIRA_HUNIECAM_SESSION_V3"},"guard":{"MADEIRA_HUNIECAM_CONFIG_GUARD_V1","MADEIRA_HUNIECAM_CONFIG_GUARD_V2"},"performance":{"MADEIRA_HUNIECAM_PERFORMANCE_V1","MADEIRA_HUNIECAM_PERFORMANCE_V2"},"run_record":{"MADEIRA_HUNIECAM_RUN_RECORD_V1"},"run_context":{"MADEIRA_HUNIECAM_RUN_CONTEXT_V1","MADEIRA_HUNIECAM_RUN_CONTEXT_V2"},"pe_imports":{"MADEIRA_HUNIECAM_PE_IMPORTS_V1"},"native_modules":{"MADEIRA_HUNIECAM_NATIVE_MODULES_V1"},"acceptance":{"MADEIRA_HUNIECAM_ACCEPTANCE_V2","MADEIRA_HUNIECAM_ACCEPTANCE_V3","MADEIRA_HUNIECAM_ACCEPTANCE_V4","MADEIRA_HUNIECAM_ACCEPTANCE_V5","MADEIRA_HUNIECAM_ACCEPTANCE_V6","MADEIRA_HUNIECAM_ACCEPTANCE_V7","MADEIRA_HUNIECAM_ACCEPTANCE_V8","MADEIRA_HUNIECAM_ACCEPTANCE_V9"}}
 def load(path:pathlib.Path|None)->dict[str,Any]|None: return None if path is None else json.loads(path.read_text(encoding="utf-8"))
 def _sha_json(value:Any)->str: return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode("utf-8")).hexdigest()
 def _exe_hash(preflight:dict[str,Any]|None)->str|None:
@@ -54,10 +54,10 @@ def validate(preflight:dict[str,Any]|None,session:dict[str,Any]|None=None,guard:
                 if value is not None and run_context.get(key)!=_sha_json(value): errors.append(f"Run context does not hash the supplied {label} report; evidence may be mixed across launches.")
                 if value is None and run_context.get(key): errors.append(f"Run context seals a {label} report but none was supplied to the contract.")
             if native_modules is not None and run_context.get("native_module_set_sha256")!=native_modules.get("module_set_sha256"): errors.append("Run context native-module-set fingerprint does not match the supplied native-module audit.")
-        else: warnings.append("Legacy Run Context V1 is readable but does not seal all Cycle 6 evidence.")
+        else: warnings.append("Legacy Run Context V1 is readable but does not seal all current evidence.")
         logs=run_context.get("logs") if isinstance(run_context.get("logs"),dict) else {}; md=logs.get("madeira") if isinstance(logs.get("madeira"),dict) else {}
         if not md.get("present"): errors.append("Run context does not prove a Madeira log was present.")
-    else: warnings.append("No per-launch run context supplied; final Cycle 6 acceptance requires Context V2.")
+    else: warnings.append("No per-launch run context supplied; final acceptance requires Context V2.")
     if pe_imports:
         if not pe_imports.get("valid"): errors.append("PE import audit is invalid.")
         ih=pe_imports.get("file_sha256")
@@ -70,9 +70,9 @@ def validate(preflight:dict[str,Any]|None,session:dict[str,Any]|None=None,guard:
     if acceptance and acceptance.get("accepted") is True:
         if errors: errors.append("Acceptance says ACCEPTED while contract has provenance/schema errors.")
         if performance and not performance.get("comparison_clean",False): errors.append("Acceptance says ACCEPTED but performance evidence is not clean.")
-        if not complete: errors.append("Cycle 6 acceptance requires fully sealed Run Context V2 including owned dependency audits.")
+        if not complete: errors.append("Final acceptance requires fully sealed Run Context V2 including owned dependency audits.")
         if run_context and acceptance.get("run_id_sha256") and acceptance.get("run_id_sha256")!=run_context.get("run_id_sha256"): errors.append("Acceptance report run ID does not match run context.")
-    return {"schema":SCHEMA,"valid":not errors,"owned_executable_sha256":owned_hash,"run_id_sha256":run_context.get("run_id_sha256") if run_context else None,"run_context_v2_complete":complete,"artifact_schemas":schemas,"present_artifacts":[n for n,v in artifacts.items() if v is not None],"errors":errors,"warnings":warnings,"rule":"Final Cycle 6 evidence must use Context V2 sealing guard, performance, PE imports and the owned native-module set; never mix evidence across run IDs."}
+    return {"schema":SCHEMA,"valid":not errors,"owned_executable_sha256":owned_hash,"run_id_sha256":run_context.get("run_id_sha256") if run_context else None,"run_context_v2_complete":complete,"artifact_schemas":schemas,"present_artifacts":[n for n,v in artifacts.items() if v is not None],"errors":errors,"warnings":warnings,"rule":"Final evidence must use Context V2 sealing guard, performance, PE imports and the owned native-module set; never mix evidence across run IDs."}
 
 def main()->int:
     p=argparse.ArgumentParser(); p.add_argument("--preflight",type=pathlib.Path,required=True); p.add_argument("--session",type=pathlib.Path); p.add_argument("--guard",type=pathlib.Path); p.add_argument("--performance",type=pathlib.Path); p.add_argument("--run-record",type=pathlib.Path); p.add_argument("--run-context",type=pathlib.Path); p.add_argument("--pe-imports",type=pathlib.Path); p.add_argument("--native-modules",type=pathlib.Path); p.add_argument("--acceptance",type=pathlib.Path); p.add_argument("--json",dest="json_path",type=pathlib.Path); args=p.parse_args(); report=validate(load(args.preflight),load(args.session),load(args.guard),load(args.performance),load(args.run_record),load(args.acceptance),load(args.run_context),load(args.pe_imports),load(args.native_modules)); text=json.dumps(report,indent=2,sort_keys=True)
