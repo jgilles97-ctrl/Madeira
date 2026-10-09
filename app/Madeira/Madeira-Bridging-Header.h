@@ -21,6 +21,12 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+// Apple's iOS sample declares proc_pid_rusage explicitly after including
+// <sys/resource.h>; keep the same compatible declaration so SDK header layout
+// changes do not turn this bridging header into an implicit-declaration build
+// failure.
+extern int proc_pid_rusage(int pid, int flavor, rusage_info_t *buffer);
+
 static inline uint64_t madeira_available_memory_bytes(void)
 {
     return (uint64_t)os_proc_available_memory();
