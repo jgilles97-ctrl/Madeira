@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Maintain a machine-readable HunieCam compatibility attempt ledger.
 
-Cycle 5 can lock the ledger to a provenance-checked owned-build fingerprint from
-huniecam_run_record.py. Once locked, attempts from another binary are rejected
-instead of contaminating the historical best-stage result.
+Cycle 5 locks the ledger to a provenance-checked owned-build fingerprint and
+includes display mode in the launch-profile fingerprint so pointer-relevant
+Fit/stretch changes cannot masquerade as the same diagnostic run.
 """
 from __future__ import annotations
 
@@ -52,6 +52,8 @@ def _migrate(ledger: dict[str, Any] | None) -> dict[str, Any]:
         for attempt in out.get("attempts", []):
             if isinstance(attempt, dict):
                 attempt.setdefault("owned_build_fingerprint", None)
+                if isinstance(attempt.get("profile"), dict):
+                    attempt["profile"].setdefault("display", "unknown-legacy")
     elif schema != SCHEMA:
         raise ValueError(f"unsupported ledger schema: {schema}")
     return out
@@ -81,6 +83,7 @@ def add_attempt(
     fps: int,
     config: str,
     arguments: str,
+    display: str = "fit",
     purpose: str = "diagnostic",
     note: str = "",
     now: str | None = None,
@@ -93,6 +96,8 @@ def add_attempt(
         raise ValueError("purpose must be diagnostic, repeatability, acceptance, or acceptance-measurement")
     if launch_mode not in {"direct", "dock"}:
         raise ValueError("launch_mode must be direct or dock")
+    if not display.strip():
+        raise ValueError("display mode must be recorded")
     if fps <= 0:
         raise ValueError("fps must be positive")
 
@@ -104,11 +109,11 @@ def add_attempt(
         raise ValueError("run record belongs to a different owned HunieCam build; start a separate ledger instead of mixing binaries")
     if not locked_build and record_build:
         out["owned_build_fingerprint"] = record_build
-        locked_build = record_build
 
     profile = {
         "launch_mode": launch_mode,
         "resolution": resolution,
+        "display": display.strip(),
         "fps": fps,
         "config": config.strip(),
         "arguments": arguments.strip(),
@@ -123,6 +128,10 @@ def add_attempt(
         rec_stage = int(rec_session.get("deepest_stage", -1))
         if rec_stage != stage:
             raise ValueError("run record deepest stage does not match the supplied session")
+        rec_profile = run_record.get("profile") if isinstance(run_record.get("profile"), dict) else {}
+        for key, value in (("launch_mode", launch_mode), ("resolution", resolution), ("display", display), ("fps", fps), ("config", config.strip()), ("arguments", arguments.strip())):
+            if rec_profile.get(key) != value:
+                raise ValueError(f"run record profile {key} does not match the ledger attempt")
 
     old_best = int(out.get("best_stage", 0))
     if not attempts:
@@ -194,6 +203,7 @@ def main() -> int:
     p.add_argument("--out", type=pathlib.Path, required=True)
     p.add_argument("--launch-mode", choices=["direct", "dock"], default="direct")
     p.add_argument("--resolution", default="1280x720")
+    p.add_argument("--display", default="fit")
     p.add_argument("--fps", type=int, default=60)
     p.add_argument("--config", default="")
     p.add_argument("--arguments", default="")
@@ -205,7 +215,7 @@ def main() -> int:
     guard = load(args.guard)
     ledger, summary = add_attempt(
         load(args.ledger), session, guard,
-        launch_mode=args.launch_mode, resolution=args.resolution, fps=args.fps,
+        launch_mode=args.launch_mode, resolution=args.resolution, display=args.display, fps=args.fps,
         config=args.config, arguments=args.arguments, purpose=args.purpose, note=args.note,
         run_record=load(args.run_record),
     )
