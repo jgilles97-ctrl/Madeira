@@ -1,0 +1,46 @@
+name: Detroit MoltenVK cache split tests
+
+on:
+  push:
+    paths:
+      - "build/moltenvk-ios/patch_detroit_ipad_cache.py"
+      - "build/moltenvk-ios/build.sh"
+      - "tools/detroit_vulkan_payload.py"
+      - "tests/host/check-detroit-vulkan-payload.py"
+      - "tests/host/check-detroit-moltenvk-cache-split.py"
+      - "docs/detroit-m4-8gb.cfg"
+      - ".github/workflows/detroit-moltenvk-cache-tests.yml"
+  pull_request:
+    paths:
+      - "build/moltenvk-ios/patch_detroit_ipad_cache.py"
+      - "build/moltenvk-ios/build.sh"
+      - "tools/detroit_vulkan_payload.py"
+      - "tests/host/check-detroit-vulkan-payload.py"
+      - "tests/host/check-detroit-moltenvk-cache-split.py"
+      - "docs/detroit-m4-8gb.cfg"
+      - ".github/workflows/detroit-moltenvk-cache-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cache-split-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Compile cache-split checks
+        run: >-
+          python -m py_compile
+          build/moltenvk-ios/patch_detroit_ipad_cache.py
+          tools/detroit_vulkan_payload.py
+          tests/host/check-detroit-vulkan-payload.py
+          tests/host/check-detroit-moltenvk-cache-split.py
+      - name: Validate MoltenVK build shell
+        run: bash -n build/moltenvk-ios/build.sh
+      - name: Exercise low-memory cache split
+        run: python tests/host/check-detroit-moltenvk-cache-split.py
+      - name: Exercise payload identity fixtures
+        run: python tests/host/check-detroit-vulkan-payload.py
