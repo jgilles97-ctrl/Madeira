@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Strengthen the Detroit Vulkan canary with renderer-specific descriptor checks.
+"""Strengthen the Detroit Vulkan canary with renderer-specific checks.
 
 The base probe stays readable and portable. This build-time patch is deliberately
 fail-closed: every anchor must match exactly once, otherwise the Windows canary
 is not built. The output requires the descriptor-indexing feature bits documented
-by Quantic Dream's Detroit renderer and enables those exact bits on VkDevice.
+by Quantic Dream's Detroit renderer, enables those exact bits on VkDevice, and
+runs the linked compute write/readback integrity canary before aggregate PASS.
 """
 
 from __future__ import annotations
@@ -24,8 +25,9 @@ def patch(text: str) -> str:
     text = replace_once(
         text,
         '#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V4"',
-        '#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V5"',
-        "probe schema",
+        '#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V5"\n\n'
+        'int madeira_compute_writeback_main(void);',
+        "probe schema / compute canary declaration",
     )
 
     text = replace_once(
@@ -222,6 +224,22 @@ def patch(text: str) -> str:
         "explicit descriptor feature enablement",
     )
 
+    text = replace_once(
+        text,
+        '    FreeLibrary(loader);\n\n'
+        '    printf("DETROIT_CAPABILITIES=PASS\\n");\n',
+        '    FreeLibrary(loader);\n\n'
+        '    {\n'
+        '        int compute_rc = madeira_compute_writeback_main();\n'
+        '        if (compute_rc != 0)\n'
+        '            return fail(50, "detroit-compute-writeback",\n'
+        '                        "argument-buffer compute dispatch did not preserve the expected storage-buffer write");\n'
+        '    }\n'
+        '    printf("DETROIT_COMPUTE_WRITEBACK=PASS\\n");\n'
+        '    printf("DETROIT_CAPABILITIES=PASS\\n");\n',
+        "compute integrity before aggregate capability PASS",
+    )
+
     return text
 
 
@@ -234,7 +252,7 @@ def main() -> int:
     transformed = patch(source)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(transformed, encoding="utf-8")
-    print(f"PASS: wrote Detroit descriptor-hardened probe to {args.output}")
+    print(f"PASS: wrote Detroit descriptor/compute-hardened probe to {args.output}")
     return 0
 
 
