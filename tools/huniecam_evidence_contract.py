@@ -23,7 +23,11 @@ SUPPORTED = {
     "run_record": {"MADEIRA_HUNIECAM_RUN_RECORD_V1"},
     "run_context": {"MADEIRA_HUNIECAM_RUN_CONTEXT_V1"},
     "pe_imports": {"MADEIRA_HUNIECAM_PE_IMPORTS_V1"},
-    "acceptance": {"MADEIRA_HUNIECAM_ACCEPTANCE_V2", "MADEIRA_HUNIECAM_ACCEPTANCE_V3", "MADEIRA_HUNIECAM_ACCEPTANCE_V4", "MADEIRA_HUNIECAM_ACCEPTANCE_V5"},
+    "acceptance": {
+        "MADEIRA_HUNIECAM_ACCEPTANCE_V2", "MADEIRA_HUNIECAM_ACCEPTANCE_V3",
+        "MADEIRA_HUNIECAM_ACCEPTANCE_V4", "MADEIRA_HUNIECAM_ACCEPTANCE_V5",
+        "MADEIRA_HUNIECAM_ACCEPTANCE_V6",
+    },
 }
 
 
@@ -155,6 +159,8 @@ def validate(
             errors.append("Acceptance says ACCEPTED but supplied performance evidence is not clean/comparable.")
         if run_context is None:
             errors.append("Cycle 6 acceptance says ACCEPTED without a per-launch run context.")
+        elif acceptance.get("run_id_sha256") and acceptance.get("run_id_sha256") != run_context.get("run_id_sha256"):
+            errors.append("Acceptance report run ID does not match the supplied sealed run context.")
 
     return {
         "schema": SCHEMA,
