@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Host checks for tools/detroit_readiness.py."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import pathlib
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+TOOL = ROOT / "tools" / "detroit_readiness.py"
+
+spec = importlib.util.spec_from_file_location("detroit_readiness", TOOL)
+assert spec and spec.loader
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def code_map(report: dict[str, object]) -> dict[str, dict[str, object]]:
+    checks = report["checks"]
+    assert isinstance(checks, list)
+    return {str(c["code"]): c for c in checks if isinstance(c, dict)}
+
+
+def test_clean_fixture(root: pathlib.Path) -> None:
+    game = root / "Detroit"
+    game.mkdir()
+    (game / "DetroitBecomeHuman.exe").write_bytes(b"MZ" + b"x" * (10 * 1024 * 1024))
+    options = game / "GraphicOptions.JSON"
+    options.write_text(json.dumps({"DEPTH_OF_FIELD": 0}), encoding="utf-8")
+    cache = game / "ShaderCache"
+    cache.mkdir()
+    (cache / "pipeline.bin").write_bytes(b"cache")
+    env = root / "madeira.cfg"
+    env.write_text(
+        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3\n"
+        "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=0\n",
+        encoding="utf-8",
+    )
+    log = root / "madeira-log.txt"
+    log.write_text("Detroit boot\nCompiling Shaders 50%\nmenu reached\n", encoding="utf-8")
+
+    report = mod.audit(game, options, cache, env, log)
+    checks = code_map(report)
+    require(report["overall"] == "READY_FOR_NEXT_GATE", f"unexpected status: {report['overall']}")
+    require(checks["game_exe"]["status"] == "PASS", "game executable should pass")
+    require(checks["depth_of_field"]["status"] == "PASS", "DOF=0 should pass")
+    require(checks["shader_compression"]["status"] == "PASS", "compression should pass")
+
+
+def test_known_failures(root: pathlib.Path) -> None:
+    log = root / "bad.log"
+    log.write_text(
+        "[mvk-error] VK_ERROR_INITIALIZATION_FAILED: Render pipeline compile failed\n"
+        "Blending is enabled but MTLPixelFormatR32Uint is not blendable\n"
+        "Vertex attribute in_color(3) is missing from the vertex descriptor\n"
+        "Vertex Function(main0): missing Buffer binding at index 19 for spvDrawIndex[0]\n"
+        "Fragment input(s) user(locn10) mismatching vertex shader output type(s) or not written\n"
+        "Compiling Shaders 98%\n"
+        "jetsam: process killed for memory pressure\n",
+        encoding="utf-8",
+    )
+    report = mod.audit(None, None, None, None, log)
+    checks = code_map(report)
+    expected = {
+        "mvk_init_failure",
+        "r32uint_blending",
+        "missing_vertex_attribute",
+        "draw_index_binding",
+        "locn10_interface",
+        "shader_98_percent",
+        "memory_pressure",
+    }
+    require(expected.issubset(checks), f"missing findings: {sorted(expected - set(checks))}")
+    require(report["overall"] == "BLOCKED", "known hard failures should block the next gate")
+
+
+def test_no_destructive_behavior(root: pathlib.Path) -> None:
+    cache = root / "ShaderCache"
+    cache.mkdir()
+    payload = cache / "keep.bin"
+    payload.write_bytes(b"do-not-delete")
+    before = payload.read_bytes()
+    mod.audit(None, None, cache, None, None)
+    require(payload.exists(), "audit deleted a cache file")
+    require(payload.read_bytes() == before, "audit modified a cache file")
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        test_clean_fixture(root / "clean") if False else None
+
+    # Give each case its own tree so a deliberately bad fixture cannot leak.
+    for test in (test_clean_fixture, test_known_failures, test_no_destructive_behavior):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            root.mkdir(parents=True, exist_ok=True)
+            test(root)
+            print(f"PASS {test.__name__}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
