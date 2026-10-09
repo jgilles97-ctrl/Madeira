@@ -21,12 +21,20 @@ def session(stage, failures=()):
     }
 
 
-def run_record(stage, build="build-a"):
+def run_record(stage, build="build-a", *, config="", arguments="", display="fit", resolution="1280x720", fps=60, launch_mode="direct"):
     return {
         "schema": "MADEIRA_HUNIECAM_RUN_RECORD_V1",
         "ready_for_comparison": True,
         "build": {"fingerprint_sha256": build},
         "session": {"deepest_stage": stage},
+        "profile": {
+            "launch_mode": launch_mode,
+            "resolution": resolution,
+            "display": display,
+            "fps": fps,
+            "config": config,
+            "arguments": arguments,
+        },
     }
 
 
@@ -35,12 +43,14 @@ class HunieCamAttemptLedgerTests(unittest.TestCase):
         ledger, summary = mod.add_attempt(None, session(30), {"status": "PASS", "experiment": "clean baseline"}, launch_mode="direct", resolution="1280x720", fps=60, config="", arguments="", now="2026-10-09T00:00:00+00:00", run_record=run_record(30))
         self.assertEqual(ledger["schema"], "MADEIRA_HUNIECAM_ATTEMPT_LEDGER_V2")
         self.assertEqual(summary["attempt"]["movement"], "BASELINE")
+        self.assertEqual(summary["attempt"]["profile"]["display"], "fit")
         self.assertEqual(ledger["best_stage"], 30)
         self.assertEqual(ledger["owned_build_fingerprint"], "build-a")
 
     def test_deeper_run_is_improvement_same_build(self):
-        ledger, _ = mod.add_attempt(None, session(30), {"status": "PASS", "experiment": "clean baseline"}, launch_mode="direct", resolution="1280x720", fps=60, config="", arguments="", now="2026-10-09T00:00:00+00:00", run_record=run_record(30))
-        ledger, summary = mod.add_attempt(ledger, session(65), {"status": "PASS", "experiment": "Unity Mono RWX plain-memory A/B"}, launch_mode="direct", resolution="1280x720", fps=60, config="env.MADEIRA_WOW_RWX_PLAIN = 1", arguments="", now="2026-10-09T00:01:00+00:00", run_record=run_record(65))
+        ledger, _ = mod.add_attempt(None, session(30), {"status": "PASS", "experiment": "clean baseline"}, launch_mode="direct", resolution="1280x720", fps=60, config="", arguments="", run_record=run_record(30))
+        cfg = "env.MADEIRA_WOW_RWX_PLAIN = 1"
+        ledger, summary = mod.add_attempt(ledger, session(65), {"status": "PASS", "experiment": "Unity Mono RWX plain-memory A/B"}, launch_mode="direct", resolution="1280x720", fps=60, config=cfg, arguments="", run_record=run_record(65, config=cfg))
         self.assertEqual(summary["attempt"]["movement"], "IMPROVED")
         self.assertEqual(ledger["best_stage"], 65)
         self.assertEqual(ledger["best_attempt"], 2)
@@ -59,9 +69,19 @@ class HunieCamAttemptLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "deepest stage"):
             mod.add_attempt(None, session(30), None, launch_mode="direct", resolution="1280x720", fps=60, config="", arguments="", run_record=run_record(65))
 
+    def test_run_record_display_must_match_ledger_attempt(self):
+        with self.assertRaisesRegex(ValueError, "profile display"):
+            mod.add_attempt(None, session(30), None, launch_mode="direct", resolution="1280x720", display="fit", fps=60, config="", arguments="", run_record=run_record(30, display="stretch"))
+
+    def test_display_mode_changes_profile_fingerprint(self):
+        a = {"launch_mode": "direct", "resolution": "1280x720", "display": "fit", "fps": 60, "config": "", "arguments": ""}
+        b = dict(a); b["display"] = "stretch"
+        self.assertNotEqual(mod.profile_fingerprint(a), mod.profile_fingerprint(b))
+
     def test_regression_warns_against_promotion(self):
         ledger, _ = mod.add_attempt(None, session(65), {"status": "PASS", "experiment": "clean baseline"}, launch_mode="direct", resolution="1280x720", fps=60, config="", arguments="", run_record=run_record(65))
-        ledger, summary = mod.add_attempt(ledger, session(45, ("unity_crash",)), {"status": "PASS", "experiment": "native D3D9 frontend A/B"}, launch_mode="direct", resolution="1280x720", fps=60, config="d3d9 = native", arguments="", run_record=run_record(45))
+        cfg = "d3d9 = native"
+        ledger, summary = mod.add_attempt(ledger, session(45, ("unity_crash",)), {"status": "PASS", "experiment": "native D3D9 frontend A/B"}, launch_mode="direct", resolution="1280x720", fps=60, config=cfg, arguments="", run_record=run_record(45, config=cfg))
         self.assertEqual(summary["attempt"]["movement"], "REGRESSED_VS_BEST")
         self.assertTrue(summary["warnings"])
 
