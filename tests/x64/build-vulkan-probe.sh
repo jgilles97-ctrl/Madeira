@@ -6,8 +6,10 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 SRC="$HERE/vulkan_probe.c"
 COMPUTE_SRC="$HERE/vulkan_compute_writeback_probe.c"
 PATCHER="$HERE/patch-detroit-descriptor-features.py"
+COMPUTE_PATCHER="$HERE/patch-compute-writeback-portability.py"
 TMP_ROOT="${TMPDIR:-/tmp}"
 PATCHED_SRC="$TMP_ROOT/madeira-detroit-vulkan-probe-patched.c"
+PATCHED_COMPUTE_SRC="$TMP_ROOT/madeira-detroit-vulkan-compute-writeback-patched.c"
 CAP_OBJ="$TMP_ROOT/madeira-detroit-vulkan-probe.o"
 COMPUTE_OBJ="$TMP_ROOT/madeira-detroit-vulkan-compute-writeback.o"
 OUT="${VULKAN_PROBE_OUT:-$HERE/vulkan_probe.exe}"
@@ -55,14 +57,19 @@ if [ ! -f "$COMPUTE_SRC" ]; then
     echo "error: Detroit compute writeback canary source is missing: $COMPUTE_SRC" >&2
     exit 5
 fi
+if [ ! -f "$COMPUTE_PATCHER" ]; then
+    echo "error: Detroit compute portability patcher is missing: $COMPUTE_PATCHER" >&2
+    exit 6
+fi
 
 python3 "$PATCHER" "$SRC" "$PATCHED_SRC"
+python3 "$COMPUTE_PATCHER" "$COMPUTE_SRC" "$PATCHED_COMPUTE_SRC"
 
 echo "=== Madeira Windows x64 Detroit capability probe ==="
 echo "compiler: $CC"
 echo "headers:  $VK_INCLUDE"
 echo "source:   $PATCHED_SRC"
-echo "compute:  $COMPUTE_SRC"
+echo "compute:  $PATCHED_COMPUTE_SRC"
 echo "output:   $OUT"
 
 COMMON_FLAGS=(
@@ -78,7 +85,7 @@ COMMON_FLAGS=(
 # linked compute write/readback function also succeeds.
 "$CC" "${COMMON_FLAGS[@]}" -c "$PATCHED_SRC" -o "$CAP_OBJ"
 "$CC" "${COMMON_FLAGS[@]}" -Dmain=madeira_compute_writeback_main \
-    -c "$COMPUTE_SRC" -o "$COMPUTE_OBJ"
+    -c "$PATCHED_COMPUTE_SRC" -o "$COMPUTE_OBJ"
 "$CC" -o "$OUT" "$CAP_OBJ" "$COMPUTE_OBJ" -lkernel32
 
 # Keep deployment explicit: building a probe must never silently overwrite a
