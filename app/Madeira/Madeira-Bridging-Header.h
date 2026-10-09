@@ -12,6 +12,30 @@
 // On-device remote pairing for Built-in StikJIT (build/rppairing-ios, JITPairing.swift).
 #import "MadeiraRPPairing.h"
 
+// iOS/iPadOS memory telemetry used by the opt-in device diagnostics. Apple
+// recommends os_proc_available_memory() for current app headroom and
+// proc_pid_rusage() for physical footprint. Keep the C details behind tiny
+// inline wrappers so Swift call sites remain simple and testable.
+#include <stdint.h>
+#include <os/proc.h>
+#include <sys/resource.h>
+#include <unistd.h>
+
+static inline uint64_t madeira_available_memory_bytes(void)
+{
+    return (uint64_t)os_proc_available_memory();
+}
+
+static inline int madeira_memory_footprint_bytes(uint64_t *current, uint64_t *peak)
+{
+    rusage_info_current info;
+    int ret = proc_pid_rusage(getpid(), RUSAGE_INFO_CURRENT, (rusage_info_t)&info);
+    if (ret) return ret;
+    if (current) *current = info.ri_phys_footprint;
+    if (peak) *peak = info.ri_lifetime_max_phys_footprint;
+    return 0;
+}
+
 // Wine file-based logging (server_ios.c)
 void wine_log_set_file(const char *path);
 
@@ -20,7 +44,6 @@ typedef void (*wine_ui_log_callback_t)(const char *message);
 void wine_set_ui_log_callback(wine_ui_log_callback_t cb);
 
 // DXMT present counter (winemetal_unix.c) — for SwiftUI FPS overlay
-#include <stdint.h>
 uint64_t madeira_get_present_count(void);
 // ml1174: GPU busy time for the performance overlay (winemetal_unix.c). While
 // enabled, each committed command buffer adds its GPU time (union) on completion.
