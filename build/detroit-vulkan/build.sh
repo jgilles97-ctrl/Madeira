@@ -10,12 +10,24 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 FARM="$ROOT/app/Madeira/arm64ec-windows"
 OUT_DIR="${DETROIT_VULKAN_OUT:-${TMPDIR:-/tmp}/madeira-detroit-vulkan}"
+BASELINE_MOLTENVK_COMMIT="8b511fdc5351a37c305bc246e161796ddca56b18"
+EXPECTED_MOLTENVK_COMMIT="${MOLTENVK_DETROIT_EXPECTED_COMMIT:-$BASELINE_MOLTENVK_COMMIT}"
 mkdir -p "$OUT_DIR"
 
 step() { printf '\n=== %s ===\n' "$1"; }
 need_file() {
     [ -f "$1" ] || { echo "error: expected output missing: $1" >&2; exit 20; }
 }
+
+# A deliberate MoltenVK experiment is allowed, but a different ref must be
+# paired with the exact reviewed commit we expect it to resolve to. That keeps
+# a tag/branch from silently moving underneath a supposedly reproducible test.
+if [ -n "${MOLTENVK_DETROIT_REF:-}" ] && [ "$MOLTENVK_DETROIT_REF" != "$BASELINE_MOLTENVK_COMMIT" ] && \
+   [ -z "${MOLTENVK_DETROIT_EXPECTED_COMMIT:-}" ]; then
+    echo "error: MOLTENVK_DETROIT_REF overrides the audited Detroit baseline" >&2
+    echo "set MOLTENVK_DETROIT_EXPECTED_COMMIT to the exact reviewed 40-character commit too" >&2
+    exit 19
+fi
 
 step "1/6 Detroit MoltenVK for iOS"
 "$ROOT/build/moltenvk-ios/build.sh"
@@ -57,6 +69,7 @@ step "6/6 Static payload sanity"
 python3 "$ROOT/tools/detroit_vulkan_payload.py" \
     --farm "$FARM" \
     --moltenvk "$ROOT/toolchains/moltenvk-detroit-ios" \
+    --expected-moltenvk-commit "$EXPECTED_MOLTENVK_COMMIT" \
     --strict
 
 cat <<'EOF'
