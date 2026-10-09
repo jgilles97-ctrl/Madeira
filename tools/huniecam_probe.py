@@ -208,9 +208,12 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     identity["install_files_seen"] = files
     identity["install_bytes_seen"] = bytes_total
     identity["install_mib_seen"] = round(bytes_total / (1024 * 1024), 2)
-    if managed: identity["assembly_csharp_sha256"] = sha256_file(managed)
-    if mono: identity["unity_mono_sha256"] = sha256_file(mono)
-    if top_steam_api: identity["root_steam_api_sha256"] = sha256_file(top_steam_api)
+    if managed:
+        identity["assembly_csharp_sha256"] = sha256_file(managed)
+    if mono:
+        identity["unity_mono_sha256"] = sha256_file(mono)
+    if top_steam_api:
+        identity["root_steam_api_sha256"] = sha256_file(top_steam_api)
 
     layout_hits: dict[str, bool] = {}
     for rel in EXPECTED_LAYOUT:
@@ -277,10 +280,12 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
         "wine_mono_download": "not needed for HunieCam's own Unity runtime" if mono else "not determined",
         "graphics_baseline": "DXMT Direct3D 9 emulated frontend",
         "unity_arguments_baseline": "",
+        "resolution_baseline": "1280x720",
+        "fps_baseline": 60,
         "working_directory": "game/program folder (Madeira direct-launch default)",
         "input_baseline": "direct pointer/tap + keyboard/mouse; do not require XInput",
         "steam_baseline": "separate direct-game compatibility from Madeira Dock/Steam integration",
-        "save_path": r"%USERPROFILE%\AppData\LocalLow\HuniePot\HunieCam Studio\",
+        "save_path": "%USERPROFILE%\\AppData\\LocalLow\\HuniePot\\HunieCam Studio\\",
         "streaming": False,
         "native_recompile": False,
     })
@@ -306,7 +311,7 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     next_actions.extend([
         "Use this current-upstream compatibility branch and confirm JIT + Memory+ are ready before launch.",
         "Create an isolated HunieCam library entry pointing at HunieCamStudio.exe; leave the original game copy untouched.",
-        "Use direct launch first with the program folder as the working folder, default D3D9 routing, 60 FPS, and no speculative config switches.",
+        "Use direct launch first with the program folder as the working folder, 1280x720, 60 FPS, default D3D9 routing, and no speculative config switches.",
         "After the first run export madeira-log.txt and copy HunieCamStudio_Data/output_log.txt if Unity created it.",
         "Run tools/huniecam_session_triage.py so the next experiment is chosen from evidence, one variable at a time.",
         "Once startup works, verify pointer alignment, audio, disposable save/relaunch, 30-minute stability, three cold launches, and suspend/resume.",
