@@ -11,18 +11,41 @@ sys.modules["huniecam_device_evidence"] = mod
 SPEC.loader.exec_module(mod)
 
 
+def context(ready=True):
+    return {
+        "schema": "MADEIRA_HUNIECAM_RUN_CONTEXT_V1",
+        "ready": ready,
+        "run_id_sha256": "run-1",
+        "build_fingerprint_sha256": "build-1",
+        "profile_sha256": "profile-1",
+    }
+
+
 class HunieCamDeviceEvidenceTests(unittest.TestCase):
     def test_template_has_named_nine_point_grid_and_required_trials(self):
         data = mod.template()
-        self.assertEqual(data["schema"], "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V1")
+        self.assertEqual(data["schema"], "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2")
         self.assertEqual(len(data["pointer_grid"]), 9)
         self.assertEqual({x["point"] for x in data["pointer_grid"]}, set(mod.POINTER_POINTS))
         self.assertEqual(len(data["cold_launch_trials"]), 3)
         self.assertEqual(len(data["suspend_resume_trials"]), 2)
         self.assertTrue(all(x["passed"] is None for x in data["pointer_grid"]))
+        self.assertIsNone(data["run_id_sha256"])
+
+    def test_template_seeds_run_link(self):
+        data = mod.template(context())
+        self.assertEqual(data["run_id_sha256"], "run-1")
+        self.assertEqual(data["build_fingerprint_sha256"], "build-1")
+        self.assertEqual(data["profile_sha256"], "profile-1")
+        self.assertTrue(mod.summarize(data)["derived"]["run_link_ready"])
+
+    def test_unready_context_does_not_seed_false_link(self):
+        data = mod.template(context(ready=False))
+        self.assertIsNone(data["run_id_sha256"])
+        self.assertFalse(mod.summarize(data)["derived"]["run_link_ready"])
 
     def test_all_successes_derive_acceptance_counts(self):
-        data = mod.template()
+        data = mod.template(context())
         for item in data["pointer_grid"]:
             item["passed"] = True
         for item in data["cold_launch_trials"]:
@@ -38,9 +61,10 @@ class HunieCamDeviceEvidenceTests(unittest.TestCase):
         self.assertTrue(report["derived"]["pointer_grid_complete"])
         self.assertTrue(report["derived"]["cold_launch_trials_complete"])
         self.assertTrue(report["derived"]["suspend_resume_trials_complete"])
+        self.assertTrue(report["derived"]["run_link_ready"])
 
     def test_failed_pointer_is_not_hidden_by_count(self):
-        data = mod.template()
+        data = mod.template(context())
         for item in data["pointer_grid"]:
             item["passed"] = True
         data["pointer_grid"][0]["passed"] = False
@@ -51,10 +75,18 @@ class HunieCamDeviceEvidenceTests(unittest.TestCase):
         self.assertEqual(report["derived"]["pointer_failed"], ["top_left"])
 
     def test_unknown_stays_unknown(self):
-        report = mod.summarize(mod.template())
+        report = mod.summarize(mod.template(context()))
         self.assertEqual(report["normalized"]["pointer_points_tested"], 0)
         self.assertEqual(len(report["derived"]["pointer_unknown"]), 9)
         self.assertFalse(report["derived"]["cold_launch_trials_complete"])
+
+    def test_legacy_v1_can_normalize_but_warns_without_run_link(self):
+        data = mod.template()
+        data["schema"] = "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V1"
+        report = mod.summarize(data)
+        self.assertEqual(report["normalized"]["schema"], "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2")
+        self.assertFalse(report["derived"]["run_link_ready"])
+        self.assertTrue(report["warnings"])
 
 
 if __name__ == "__main__":
