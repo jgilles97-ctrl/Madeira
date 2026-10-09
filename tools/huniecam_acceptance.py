@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Evidence-based acceptance gates for the HunieCam iPad/Madeira port.
 
-Automated evidence proves machine-observable gates. Device observations are
-provided in JSON. Missing evidence remains UNKNOWN. Counted requirements
-(30-minute run, three cold launches, two suspend/resume cycles and pointer-grid
-coverage) are checked numerically so a vague checkbox cannot accidentally pass
-them. Legacy booleans remain accepted for older evidence files.
+Cycle 5 makes provenance and measured performance required acceptance evidence.
+Structured pointer/cold-launch/suspend trials are preferred over aggregate
+counts. Missing evidence remains UNKNOWN and can never pass.
 """
 from __future__ import annotations
 
@@ -14,7 +12,12 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V3"
+SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V4"
+POINTER_POINTS = {
+    "top_left", "top_center", "top_right",
+    "middle_left", "center", "middle_right",
+    "bottom_left", "bottom_center", "bottom_right",
+}
 
 
 def load(path: pathlib.Path | None) -> dict[str, Any] | None:
@@ -47,15 +50,49 @@ def threshold_or_legacy(manual: dict[str, Any] | None, numeric_key: str, minimum
 
 
 def pointer_gate(manual: dict[str, Any] | None) -> bool | None:
+    if manual and isinstance(manual.get("pointer_grid"), list):
+        seen: dict[str, bool | None] = {}
+        for item in manual["pointer_grid"]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("point", ""))
+            value = item.get("passed")
+            seen[name] = value if isinstance(value, bool) else None
+        if not POINTER_POINTS.issubset(seen):
+            return None
+        required = [seen[name] for name in POINTER_POINTS]
+        if any(v is False for v in required):
+            return False
+        if any(v is None for v in required):
+            return None
+        return True
+
     tested = number(manual, "pointer_points_tested")
     passed = number(manual, "pointer_points_passed")
     if tested is not None or passed is not None:
         if tested is None or passed is None:
             return None
-        # Nine points = four corners, four edge-midpoints and centre. Requiring
-        # every tested point to pass prevents one easy centre click from passing.
         return tested >= 9 and passed == tested
     return manual_bool(manual, "pointer_aligned")
+
+
+def trial_gate(manual: dict[str, Any] | None, list_key: str, minimum: int, numeric_key: str, legacy_key: str) -> bool | None:
+    if manual and isinstance(manual.get(list_key), list):
+        values: list[bool | None] = []
+        for item in manual[list_key]:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("success")
+            values.append(value if isinstance(value, bool) else None)
+        if len(values) < minimum:
+            return None
+        required = values[:minimum]
+        if any(v is False for v in required):
+            return False
+        if any(v is None for v in required):
+            return None
+        return True
+    return threshold_or_legacy(manual, numeric_key, minimum, legacy_key)
 
 
 def gate(name: str, value: bool | None, evidence: str, required: bool = True) -> dict[str, Any]:
@@ -72,6 +109,8 @@ def evaluate(
     session: dict[str, Any] | None,
     save_verification: dict[str, Any] | None,
     manual: dict[str, Any] | None,
+    performance: dict[str, Any] | None = None,
+    evidence_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     gates: list[dict[str, Any]] = []
 
@@ -81,6 +120,10 @@ def evaluate(
         owned_identity = bool(preflight.get("exe_found")) and bool(pe.get("valid_pe")) and bool(preflight.get("identity", {}).get("exe_sha256"))
     gates.append(gate("owned_game_identity", owned_identity,
                       "Preflight identified a real PE executable and recorded its SHA-256."))
+
+    contract_ok = None if evidence_contract is None else bool(evidence_contract.get("valid"))
+    gates.append(gate("evidence_contract_valid", contract_ok,
+                      "Cycle 5 evidence contract proves the supplied files use supported schemas and agree on the owned executable/build provenance."))
 
     gates.append(gate("jit_and_memory_ready", manual_bool(manual, "jit_memory_ready"),
                       "Device observation: Madeira showed JIT and Memory+ ready before launch."))
@@ -96,7 +139,7 @@ def evaluate(
     gates.append(gate("rendering_correct", manual_bool(manual, "rendering_correct"),
                       "Device observation: text, sprites, panels and effects rendered without blocking corruption."))
     gates.append(gate("pointer_grid", pointer_gate(manual),
-                      "Counted device sweep: >=9 screen points tested and every tested point passed; legacy pointer_aligned boolean remains supported."))
+                      "Structured nine-point sweep preferred; all four corners, four edge-midpoints and centre must pass."))
     gates.append(gate("audio_correct", manual_bool(manual, "audio_correct"),
                       "Device observation: music/effects were present and stable without persistent crackle/latency."))
 
@@ -117,14 +160,18 @@ def evaluate(
     gates.append(gate("save_progress_visible_after_relaunch", manual_bool(manual, "save_progress_visible_after_relaunch"),
                       "Device observation: relaunched game visibly restored the same progress."))
 
+    perf_clean = None if performance is None else bool(performance.get("comparison_clean"))
+    gates.append(gate("performance_measurement_clean", perf_clean,
+                      "Automated performance evidence must contain measurements, prove the intended FPS cap, and avoid serious thermal pressure / Low Power Mode."))
     gates.append(gate("performance_acceptable", manual_bool(manual, "performance_acceptable"),
-                      "Measured/observed busy play had acceptable frame pacing and no runaway game speed."))
+                      "Observed busy play had acceptable responsiveness/frame pacing and no runaway game speed."))
+
     gates.append(gate("stable_30_minutes", threshold_or_legacy(manual, "stable_minutes", 30, "stable_30_minutes"),
-                      "Counted representative stable play must be >=30 minutes; legacy boolean remains supported."))
-    gates.append(gate("three_cold_launches", threshold_or_legacy(manual, "cold_launches", 3, "three_cold_launches"),
-                      "Counted successful cold launches must be >=3; legacy boolean remains supported."))
-    gates.append(gate("two_suspend_resume_cycles", threshold_or_legacy(manual, "suspend_resume_cycles", 2, "two_suspend_resume_cycles"),
-                      "Counted successful background/foreground cycles must be >=2; legacy boolean remains supported."))
+                      "Representative stable play must be >=30 minutes."))
+    gates.append(gate("three_cold_launches", trial_gate(manual, "cold_launch_trials", 3, "cold_launches", "three_cold_launches"),
+                      "Three explicit successful cold-launch trials are preferred; aggregate count/legacy boolean remain supported."))
+    gates.append(gate("two_suspend_resume_cycles", trial_gate(manual, "suspend_resume_trials", 2, "suspend_resume_cycles", "two_suspend_resume_cycles"),
+                      "Two explicit successful background/foreground trials are preferred; aggregate count/legacy boolean remain supported."))
     gates.append(gate("repeatable_profile", manual_bool(manual, "repeatable_profile"),
                       "Device observation: documented final profile reproduced the same result from a clean Madeira start."))
 
@@ -141,7 +188,7 @@ def evaluate(
         "next_unproven_gate": next_gate,
         "gates": gates,
         "thresholds": {"pointer_points": 9, "stable_minutes": 30, "cold_launches": 3, "suspend_resume_cycles": 2},
-        "rule": "Unknown is never pass. Counted gates must meet their threshold. The port is accepted only when every required gate is PASS.",
+        "rule": "Unknown is never pass. Acceptance also requires valid cross-file provenance and clean automated performance evidence; manual observations cannot override those machine gates.",
     }
 
 
@@ -151,10 +198,15 @@ def main() -> int:
     parser.add_argument("--session", type=pathlib.Path)
     parser.add_argument("--save-verification", type=pathlib.Path,
                         help="JSON from huniecam_save_probe.py verify BEFORE AFTER RELAUNCH")
-    parser.add_argument("--manual", type=pathlib.Path, help="JSON with explicit device observations/counts")
+    parser.add_argument("--manual", type=pathlib.Path, help="Structured JSON from huniecam_device_evidence.py or compatible observations")
+    parser.add_argument("--performance", type=pathlib.Path, help="JSON from huniecam_performance.py")
+    parser.add_argument("--evidence-contract", type=pathlib.Path, help="JSON from huniecam_evidence_contract.py")
     parser.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = parser.parse_args()
-    report = evaluate(load(args.preflight), load(args.session), load(args.save_verification), load(args.manual))
+    report = evaluate(
+        load(args.preflight), load(args.session), load(args.save_verification), load(args.manual),
+        load(args.performance), load(args.evidence_contract),
+    )
     rendered = json.dumps(report, indent=2, sort_keys=True)
     if args.json_path:
         args.json_path.write_text(rendered + "\n", encoding="utf-8")
