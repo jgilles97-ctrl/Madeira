@@ -14,6 +14,11 @@
  * gate. Madeira recomputes the same fingerprint from the test payload bundled
  * in the currently installed app. A proof from an older renderer/test build is
  * therefore rejected automatically instead of silently unlocking Detroit.
+ *
+ * iOS may refuse active Metal command buffers when an app leaves the foreground.
+ * Madeira writes a fixed invalidation marker if this diagnostic becomes inactive
+ * while its Wine process is running. This controller clears that marker before
+ * the test starts and refuses to publish PASS proof if it appears during the run.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -26,6 +31,7 @@
 #define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"
 #define PROOF_PATH "C:\\madeira-detroit-vulkan-gate.txt"
 #define PROOF_TEMP_PATH "C:\\madeira-detroit-vulkan-gate.tmp"
+#define FOREGROUND_INVALID_PATH "C:\\madeira-detroit-vulkan-gate-invalid.txt"
 #define FNV64_OFFSET UINT64_C(14695981039346656037)
 #define FNV64_PRIME UINT64_C(1099511628211)
 
@@ -98,9 +104,27 @@ static int payload_fingerprint(uint64_t *out_hash)
 
 static void clear_stale_proof(void)
 {
-    /* A stale PASS is more dangerous than no proof. Ignore missing-file errors. */
+    /* Stale PASS/invalidation state is more dangerous than no proof. */
     DeleteFileA(PROOF_TEMP_PATH);
     DeleteFileA(PROOF_PATH);
+    DeleteFileA(FOREGROUND_INVALID_PATH);
+}
+
+static int foreground_integrity_ok(void)
+{
+    DWORD attrs = GetFileAttributesA(FOREGROUND_INVALID_PATH);
+    if (attrs != INVALID_FILE_ATTRIBUTES) {
+        printf("FOREGROUND_INTEGRITY=FAIL\n");
+        printf("FOREGROUND_INVALIDATION=%s\n", FOREGROUND_INVALID_PATH);
+        return 0;
+    }
+    if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) {
+        printf("FOREGROUND_INTEGRITY=FAIL\n");
+        printf("FOREGROUND_ERROR=GetFileAttributesA:%lu\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    printf("FOREGROUND_INTEGRITY=PASS\n");
+    return 1;
 }
 
 static int write_full_pass_proof(uint64_t payload_hash)
@@ -116,6 +140,7 @@ static int write_full_pass_proof(uint64_t payload_hash)
         "SCHEMA=%s\r\n"
         "ARCH=x86_64-windows\r\n"
         "EXECUTION=physical-device-local\r\n"
+        "FOREGROUND_INTEGRITY=PASS\r\n"
         "PAYLOAD_FNV64=%016llx\r\n"
         "VULKAN_DEVICE=PASS\r\n"
         "WIN32_SURFACE=PASS\r\n"
@@ -161,7 +186,6 @@ static int write_full_pass_proof(uint64_t payload_hash)
     }
     CloseHandle(file);
 
-    /* Publish atomically only after the complete PASS payload is durable. */
     if (!MoveFileExA(PROOF_TEMP_PATH, PROOF_PATH,
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         DWORD err = GetLastError();
@@ -191,15 +215,12 @@ static int run_stage(const gate_stage *stage)
     memset(&si, 0, sizeof(si));
     memset(&pi, 0, sizeof(pi));
     si.cb = sizeof(si);
-
     snprintf(command, sizeof(command), "\"C:\\windows\\system32\\%s\"", stage->exe);
 
     printf("GATE_BEGIN=%s\n", stage->name);
     printf("GATE_EXE=%s\n", stage->exe);
     fflush(stdout);
 
-    /* bInheritHandles=TRUE keeps Madeira's stdout/stderr routing attached, so
-     * every child canary writes its detailed evidence into madeira-log.txt. */
     ok = CreateProcessA(NULL, command, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
     if (!ok) {
         printf("GATE_RESULT=%s:FAIL\n", stage->name);
@@ -263,6 +284,7 @@ int main(void)
     printf("ARCH=x86_64-windows\n");
     printf("PURPOSE=prove-local-FEX-Wine-Vulkan-MoltenVK-Metal-path-before-Detroit\n");
     printf("STALE_PROOF_CLEARED=1\n");
+    printf("FOREGROUND_GUARD_ARMED=1\n");
     fflush(stdout);
 
     if (payload_fingerprint(&payload_hash) != 0) {
@@ -294,8 +316,15 @@ int main(void)
     printf("PRESENTED_120_FRAMES=PASS\n");
     fflush(stdout);
 
-    /* Proof publication is part of the gate. A test that rendered correctly but
-     * cannot persist its evidence does NOT advance the project automatically. */
+    if (!foreground_integrity_ok()) {
+        printf("OVERALL=FAIL\n");
+        printf("FAILED_GATE=foreground-integrity\n");
+        printf("PROOF_RESULT=NOT_WRITTEN\n");
+        printf("NEXT_ACTION=rerun-graphics-test-with-Madeira-kept-in-foreground\n");
+        fflush(stdout);
+        return 28;
+    }
+
     {
         int proof_rc = write_full_pass_proof(payload_hash);
         if (proof_rc != 0) {
