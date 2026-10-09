@@ -12,11 +12,13 @@ SPEC.loader.exec_module(mod)
 
 
 class HunieCamConfigGuardTests(unittest.TestCase):
-    def test_clean_baseline_passes(self):
+    def test_clean_baseline_passes_without_renderer_override(self):
         r = mod.inspect("", "")
+        self.assertEqual(r["schema"], "MADEIRA_HUNIECAM_CONFIG_GUARD_V2")
         self.assertEqual(r["status"], "PASS")
         self.assertEqual(r["change_count"], 0)
         self.assertEqual(r["experiment"], "clean baseline")
+        self.assertIsNone(r["baseline"]["renderer_override"])
 
     def test_single_known_rwx_experiment_passes(self):
         r = mod.inspect("env.MADEIRA_WOW_RWX_PLAIN = 1\n", "")
@@ -24,10 +26,12 @@ class HunieCamConfigGuardTests(unittest.TestCase):
         self.assertEqual(r["change_count"], 1)
         self.assertIn("RWX", r["experiment"])
 
-    def test_single_force_d3d9_argument_passes(self):
+    def test_single_force_d3d9_argument_passes_as_conditional_experiment(self):
         r = mod.inspect("", "-force-d3d9")
         self.assertEqual(r["status"], "PASS")
         self.assertEqual(r["change_count"], 1)
+        self.assertIn("D3D9", r["experiment"])
+        self.assertIn("graphics failure", r["conditional_experiment_rules"]["-force-d3d9"])
 
     def test_two_changes_fail_one_variable_rule(self):
         r = mod.inspect("d3d9 = native\n", "-force-d3d9")
@@ -48,9 +52,11 @@ class HunieCamConfigGuardTests(unittest.TestCase):
         self.assertEqual(r["status"], "WARN")
         self.assertTrue(any(w["code"] == "discouraged_config" for w in r["warnings"]))
 
-    def test_force_d3d11_is_rejected(self):
+    def test_force_d3d11_is_rejected_because_baseline_observes_not_forces(self):
         r = mod.inspect("", "-force-d3d11")
         self.assertEqual(r["status"], "FAIL")
+        msg = " ".join(f["message"] for f in r["failures"])
+        self.assertIn("naturally", msg)
 
 
 if __name__ == "__main__":
