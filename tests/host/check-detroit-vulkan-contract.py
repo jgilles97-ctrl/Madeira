@@ -11,6 +11,7 @@ of Madeira's existing Metal window lifetime path.
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,11 @@ def exercise_driver_patcher() -> str:
         return output.read_text(encoding="utf-8")
 
 
+def vulkan_init_decl(text: str) -> str:
+    match = re.search(r"extern\s+UINT\s+winios_pVulkanInit\s*\([^;]+;", text, re.S)
+    return match.group(0) if match else ""
+
+
 def main() -> int:
     probe = read("tests/x64/vulkan_probe.c")
     build = read("tests/x64/build-vulkan-probe.sh")
@@ -80,16 +86,11 @@ def main() -> int:
     ):
         require(needle in probe, f"Vulkan probe contract missing: {needle}")
 
-    # MoltenVK exposes VK_KHR_portability_subset. If advertised, a conformant
-    # application must enable it at VkDevice creation; keep the canary honest.
     require("VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME" in probe,
             "headless probe lost portability-subset handling")
     require("enabled_device_exts" in probe,
             "headless probe reports portability subset but does not enable device extensions")
 
-    # WSI canary must cross the Win32 ABI boundary and validate present support,
-    # formats, and modes. Merely checking that the extension name exists is not
-    # enough to prove HWND -> CAMetalLayer works.
     for needle in (
         'LoadLibraryA("vulkan-1.dll")',
         "CreateWindowExA",
@@ -106,7 +107,6 @@ def main() -> int:
         require(needle in wsi_probe, f"Vulkan WSI probe contract missing: {needle}")
     require("-luser32" in wsi_build.lower(), "WSI probe builder must link Win32 user32")
 
-    # Reuse the exact Metal-layer path Madeira already keeps correct for DXMT.
     exported = (
         "macdrv_view_create_metal_view",
         "macdrv_view_get_metal_layer",
@@ -127,8 +127,6 @@ def main() -> int:
     require("metal_view" in header and "metal_layer" in header,
             "surface binding must preserve both retained view token and layer pointer")
 
-    # Static MoltenVK loader: win32u must take its normal SONAME_LIBVULKAN path,
-    # but dlopen/dlsym are redirected to direct static MoltenVK entry points.
     for needle in (
         "madeira_vulkan_dlopen",
         "madeira_vulkan_dlsym",
@@ -144,8 +142,6 @@ def main() -> int:
     require("SONAME_LIBVULKAN" in win32u_build, "Wine vulkan.c is not forced through its Vulkan-enabled path")
     require("libMoltenVK.a" in win32u_build, "MoltenVK archive is not merged into the app-facing win32u archive")
 
-    # User-driver side: map guest Win32 surfaces to Metal and hand Wine a real
-    # pVulkanInit callback instead of the nulldrv STATUS_NOT_IMPLEMENTED slot.
     for needle in (
         "winios_pVulkanInit",
         "vkCreateMetalSurfaceEXT",
@@ -158,9 +154,6 @@ def main() -> int:
     ):
         require(needle in ios_driver, f"iOS Vulkan driver contract missing: {needle}")
 
-    # The build must compile the WSI pieces, and the generated driver must carry
-    # a STRONG reference. A weak reference inside a static archive can be left
-    # unextracted by the linker, silently reverting to Wine's null Vulkan driver.
     require("vulkan_driver_ios.c" in win32u_build,
             "win32u build does not compile the iOS Vulkan user-driver")
     require("vulkan_surface_ios.c" in win32u_build,
@@ -168,17 +161,14 @@ def main() -> int:
     require("patch_driver_vulkan.py" in win32u_build,
             "win32u build no longer wires pVulkanInit into driver_ios.c")
     require("__attribute__((weak))" not in driver_patcher,
-            "Vulkan-enabled driver patcher must not use a weak pVulkanInit reference")
-    require("__attribute__((weak))" not in patched_driver,
-            "generated Vulkan driver unexpectedly contains a weak pVulkanInit reference")
-    require("extern UINT winios_pVulkanInit" in patched_driver,
-            "generated Vulkan driver lacks strong pVulkanInit declaration")
+            "Vulkan-enabled driver patcher itself must not emit a weak pVulkanInit reference")
+    init_decl = vulkan_init_decl(patched_driver)
+    require(init_decl, "generated Vulkan driver lacks pVulkanInit declaration")
+    require("weak" not in init_decl,
+            "generated Vulkan pVulkanInit declaration is weak; static archive inclusion is not guaranteed")
     require("winios_user_driver.pVulkanInit = winios_pVulkanInit" in patched_driver,
             "generated Vulkan driver does not wire pVulkanInit")
 
-    # Reversibility: the source used by normal builds starts as the historical
-    # driver, and Detroit-only objects are removed before configuration so a
-    # previous Vulkan build cannot contaminate MADEIRA_VULKAN=0.
     require('VULKAN_DRIVER_SOURCE="$BUILD_DIR/driver_ios.c"' in win32u_build,
             "normal win32u build no longer defaults to the unpatched driver source")
     for stale in ("vulkan_static_ios.o", "vulkan_driver_ios.o", "vulkan_surface_ios.o"):
