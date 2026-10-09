@@ -223,6 +223,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Parse Detroit Swift qualification UI
+        run: xcrun --sdk iphoneos swiftc -parse -target arm64-apple-ios17.0 app/Madeira/MadeiraApp.swift
       - name: Compile iPhoneOS memory headroom canary
         run: |
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
