@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Maintain a machine-readable HunieCam compatibility attempt ledger.
 
-The ledger stores only diagnostic metadata, not proprietary game content. It
-fingerprints each launch profile, records the deepest proven stage, and says
-whether a run moved the port forward, stayed level, or regressed.
+Cycle 5 can lock the ledger to a provenance-checked owned-build fingerprint from
+huniecam_run_record.py. Once locked, attempts from another binary are rejected
+instead of contaminating the historical best-stage result.
 """
 from __future__ import annotations
 
@@ -14,7 +14,8 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_ATTEMPT_LEDGER_V1"
+SCHEMA = "MADEIRA_HUNIECAM_ATTEMPT_LEDGER_V2"
+LEGACY_SCHEMA = "MADEIRA_HUNIECAM_ATTEMPT_LEDGER_V1"
 
 
 def load(path: pathlib.Path | None) -> dict[str, Any] | None:
@@ -33,10 +34,41 @@ def new_ledger() -> dict[str, Any]:
         "schema": SCHEMA,
         "title": "HunieCam Studio",
         "steam_app_id": 426000,
+        "owned_build_fingerprint": None,
         "attempts": [],
         "best_stage": 0,
         "best_attempt": None,
     }
+
+
+def _migrate(ledger: dict[str, Any] | None) -> dict[str, Any]:
+    if ledger is None:
+        return new_ledger()
+    out = json.loads(json.dumps(ledger))
+    schema = out.get("schema")
+    if schema == LEGACY_SCHEMA:
+        out["schema"] = SCHEMA
+        out.setdefault("owned_build_fingerprint", None)
+        for attempt in out.get("attempts", []):
+            if isinstance(attempt, dict):
+                attempt.setdefault("owned_build_fingerprint", None)
+    elif schema != SCHEMA:
+        raise ValueError(f"unsupported ledger schema: {schema}")
+    return out
+
+
+def _record_build_fingerprint(run_record: dict[str, Any] | None) -> str | None:
+    if not run_record:
+        return None
+    if run_record.get("schema") != "MADEIRA_HUNIECAM_RUN_RECORD_V1":
+        raise ValueError(f"unsupported run record schema: {run_record.get('schema')}")
+    if not run_record.get("ready_for_comparison"):
+        raise ValueError("run record is not provenance-ready; do not add it to the HunieCam attempt ledger")
+    build = run_record.get("build") if isinstance(run_record.get("build"), dict) else {}
+    fingerprint = build.get("fingerprint_sha256")
+    if not fingerprint:
+        raise ValueError("run record has no owned-build fingerprint")
+    return str(fingerprint)
 
 
 def add_attempt(
@@ -52,18 +84,27 @@ def add_attempt(
     purpose: str = "diagnostic",
     note: str = "",
     now: str | None = None,
+    run_record: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    out = json.loads(json.dumps(ledger or new_ledger()))
-    if out.get("schema") != SCHEMA:
-        raise ValueError(f"unsupported ledger schema: {out.get('schema')}")
+    out = _migrate(ledger)
     if guard and guard.get("status") == "FAIL":
         raise ValueError("config guard rejected this experiment; do not record/run it as a valid HunieCam attempt")
-    if purpose not in {"diagnostic", "repeatability", "acceptance"}:
-        raise ValueError("purpose must be diagnostic, repeatability, or acceptance")
+    if purpose not in {"diagnostic", "repeatability", "acceptance", "acceptance-measurement"}:
+        raise ValueError("purpose must be diagnostic, repeatability, acceptance, or acceptance-measurement")
     if launch_mode not in {"direct", "dock"}:
         raise ValueError("launch_mode must be direct or dock")
     if fps <= 0:
         raise ValueError("fps must be positive")
+
+    record_build = _record_build_fingerprint(run_record)
+    locked_build = out.get("owned_build_fingerprint")
+    if locked_build and not record_build:
+        raise ValueError("this ledger is locked to an owned build; a provenance-ready run record is required for every new attempt")
+    if locked_build and record_build != locked_build:
+        raise ValueError("run record belongs to a different owned HunieCam build; start a separate ledger instead of mixing binaries")
+    if not locked_build and record_build:
+        out["owned_build_fingerprint"] = record_build
+        locked_build = record_build
 
     profile = {
         "launch_mode": launch_mode,
@@ -77,6 +118,12 @@ def add_attempt(
     duplicates = [a for a in attempts if a.get("profile_sha256") == fingerprint]
 
     stage = int(session.get("deepest_stage", 0))
+    if run_record:
+        rec_session = run_record.get("session") if isinstance(run_record.get("session"), dict) else {}
+        rec_stage = int(rec_session.get("deepest_stage", -1))
+        if rec_stage != stage:
+            raise ValueError("run record deepest stage does not match the supplied session")
+
     old_best = int(out.get("best_stage", 0))
     if not attempts:
         movement = "BASELINE"
@@ -90,9 +137,7 @@ def add_attempt(
     failure_codes = sorted({str(x.get("code")) for x in session.get("failures", []) if x.get("code")})
     marker_codes = sorted({str(x.get("code")) for x in session.get("markers", []) if x.get("code")})
     next_block = session.get("next", {}) if isinstance(session.get("next"), dict) else {}
-    experiment_name = None
-    if guard:
-        experiment_name = guard.get("experiment")
+    experiment_name = guard.get("experiment") if guard else None
 
     attempt = {
         "index": len(attempts) + 1,
@@ -100,6 +145,7 @@ def add_attempt(
         "purpose": purpose,
         "profile": profile,
         "profile_sha256": fingerprint,
+        "owned_build_fingerprint": record_build,
         "duplicate_profile_before": bool(duplicates),
         "previous_same_profile_attempts": [int(a.get("index", 0)) for a in duplicates],
         "guard_status": guard.get("status") if guard else None,
@@ -121,6 +167,8 @@ def add_attempt(
         out["best_stage"] = old_best
 
     warnings = []
+    if record_build is None:
+        warnings.append("This legacy/unsealed attempt has no owned-build fingerprint. New device runs should include a provenance-ready run record.")
     if duplicates and purpose == "diagnostic":
         warnings.append("This diagnostic profile was already tried. Repeat it only if you are deliberately checking reproducibility; otherwise use the next evidence-backed single-variable experiment.")
     if movement == "REGRESSED_VS_BEST":
@@ -128,10 +176,11 @@ def add_attempt(
 
     summary = {
         "attempt": attempt,
+        "owned_build_fingerprint": out.get("owned_build_fingerprint"),
         "best_stage": out["best_stage"],
         "best_attempt": out["best_attempt"],
         "warnings": warnings,
-        "recommendation": "Keep" if movement == "IMPROVED" else "Control/repeat" if purpose in {"repeatability", "acceptance"} else "Do not promote this profile yet",
+        "recommendation": "Keep" if movement == "IMPROVED" else "Control/repeat" if purpose in {"repeatability", "acceptance", "acceptance-measurement"} else "Do not promote this profile yet",
     }
     return out, summary
 
@@ -140,6 +189,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Append one HunieCam Madeira run to the evidence ledger")
     p.add_argument("--session", type=pathlib.Path, required=True)
     p.add_argument("--guard", type=pathlib.Path)
+    p.add_argument("--run-record", type=pathlib.Path, help="Provenance-ready JSON from huniecam_run_record.py")
     p.add_argument("--ledger", type=pathlib.Path)
     p.add_argument("--out", type=pathlib.Path, required=True)
     p.add_argument("--launch-mode", choices=["direct", "dock"], default="direct")
@@ -147,7 +197,7 @@ def main() -> int:
     p.add_argument("--fps", type=int, default=60)
     p.add_argument("--config", default="")
     p.add_argument("--arguments", default="")
-    p.add_argument("--purpose", choices=["diagnostic", "repeatability", "acceptance"], default="diagnostic")
+    p.add_argument("--purpose", choices=["diagnostic", "repeatability", "acceptance", "acceptance-measurement"], default="diagnostic")
     p.add_argument("--note", default="")
     args = p.parse_args()
 
@@ -157,6 +207,7 @@ def main() -> int:
         load(args.ledger), session, guard,
         launch_mode=args.launch_mode, resolution=args.resolution, fps=args.fps,
         config=args.config, arguments=args.arguments, purpose=args.purpose, note=args.note,
+        run_record=load(args.run_record),
     )
     args.out.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, sort_keys=True))
