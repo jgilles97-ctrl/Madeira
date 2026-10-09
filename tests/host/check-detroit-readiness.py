@@ -41,8 +41,11 @@ def test_clean_fixture(root: pathlib.Path) -> None:
     (cache / "pipeline.bin").write_bytes(b"cache")
     env = root / "madeira.cfg"
     env.write_text(
-        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3\n"
-        "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=0\n",
+        "# comments and spacing should not confuse the parser\n"
+        "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n"
+        "env.MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION = 0\n"
+        "env.MVK_DTR_MSL_LIBRARY_CACHE = 0\n"
+        "env.MADEIRA_DEVICE_STATS = 1\n",
         encoding="utf-8",
     )
     log = root / "madeira-log.txt"
@@ -54,6 +57,53 @@ def test_clean_fixture(root: pathlib.Path) -> None:
     require(checks["game_exe"]["status"] == "PASS", "game executable should pass")
     require(checks["depth_of_field"]["status"] == "PASS", "DOF=0 should pass")
     require(checks["shader_compression"]["status"] == "PASS", "compression should pass")
+    require(checks["concurrent_compilation"]["status"] == "PASS", "memory-first concurrency should pass")
+    require(checks["dtr_msl_library_cache"]["status"] == "PASS", "custom MSL cache=0 should pass")
+    require(checks["device_stats"]["status"] == "PASS", "device diagnostics should pass")
+
+
+def test_high_memory_profile_warns(root: pathlib.Path) -> None:
+    env = root / "madeira.cfg"
+    env.write_text(
+        "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n"
+        "env.MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION = 1\n"
+        "env.MVK_DTR_MSL_LIBRARY_CACHE = 1\n",
+        encoding="utf-8",
+    )
+    report = mod.audit(None, None, None, env, None)
+    checks = code_map(report)
+    require(report["overall"] == "CAUTION", "high-memory 64 GB Mac-style profile should warn on 8 GB baseline")
+    require(checks["concurrent_compilation"]["status"] == "WARN", "concurrency=1 should warn")
+    require(checks["dtr_msl_library_cache"]["status"] == "WARN", "Release003 cache=1 should warn")
+
+
+def test_missing_release003_cache_setting_warns(root: pathlib.Path) -> None:
+    env = root / "madeira.cfg"
+    env.write_text(
+        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3\n"
+        "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=0\n",
+        encoding="utf-8",
+    )
+    report = mod.audit(None, None, None, env, None)
+    checks = code_map(report)
+    require(checks["dtr_msl_library_cache"]["status"] == "WARN",
+            "Release003 default-on MSL cache must be explicit for the 8 GB baseline")
+
+
+def test_last_assignment_wins_and_comments_are_ignored(root: pathlib.Path) -> None:
+    env = root / "madeira.cfg"
+    env.write_text(
+        "# env.MVK_DTR_MSL_LIBRARY_CACHE = 1\n"
+        "env.MVK_DTR_MSL_LIBRARY_CACHE = 1 # old experiment\n"
+        "env.MVK_DTR_MSL_LIBRARY_CACHE = 0 # final override\n"
+        "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n"
+        "env.MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION = 0\n",
+        encoding="utf-8",
+    )
+    report = mod.audit(None, None, None, env, None)
+    checks = code_map(report)
+    require(checks["dtr_msl_library_cache"]["status"] == "PASS",
+            "last active assignment should win over comments and earlier value")
 
 
 def test_known_failures(root: pathlib.Path) -> None:
@@ -95,8 +145,14 @@ def test_no_destructive_behavior(root: pathlib.Path) -> None:
 
 
 def main() -> int:
-    # Give each case its own tree so a deliberately bad fixture cannot leak.
-    for test in (test_clean_fixture, test_known_failures, test_no_destructive_behavior):
+    for test in (
+        test_clean_fixture,
+        test_high_memory_profile_warns,
+        test_missing_release003_cache_setting_warns,
+        test_last_assignment_wins_and_comments_are_ignored,
+        test_known_failures,
+        test_no_destructive_behavior,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             test(root)
