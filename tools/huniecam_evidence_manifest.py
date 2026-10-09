@@ -2,8 +2,8 @@
 """Create a privacy-minimal manifest for one HunieCam/Madeira evidence set.
 
 The manifest hashes source evidence and copies only small structured summaries.
-It does not embed raw logs, save contents, proprietary binaries, absolute paths,
-Steam tokens, pairing material, or credentials.
+Cycle 6 also records whether the evidence includes a sealed per-launch identity
+and a PE dependency audit. Raw logs, saves, binaries and credentials remain out.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V2"
+SCHEMA = "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V3"
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -68,6 +68,15 @@ def summary(kind: str, data: dict[str, Any] | None) -> dict[str, Any] | None:
     if kind == "ledger":
         attempts = data.get("attempts", [])
         return {"schema": data.get("schema"), "attempt_count": len(attempts), "best_stage": data.get("best_stage"), "best_attempt": data.get("best_attempt")}
+    if kind == "run_record":
+        build = data.get("build") if isinstance(data.get("build"), dict) else {}
+        return {"schema": data.get("schema"), "ready_for_comparison": data.get("ready_for_comparison"), "build_fingerprint_sha256": build.get("fingerprint_sha256"), "profile_sha256": data.get("profile_sha256")}
+    if kind == "run_context":
+        return {"schema": data.get("schema"), "ready": data.get("ready"), "run_id_sha256": data.get("run_id_sha256"), "build_fingerprint_sha256": data.get("build_fingerprint_sha256"), "profile_sha256": data.get("profile_sha256")}
+    if kind == "pe_imports":
+        return {"schema": data.get("schema"), "valid": data.get("valid"), "file_sha256": data.get("file_sha256"), "import_count": data.get("import_count"), "categories": sorted((data.get("categories") or {}).keys()) if isinstance(data.get("categories"), dict) else []}
+    if kind == "contract":
+        return {"schema": data.get("schema"), "valid": data.get("valid"), "run_id_sha256": data.get("run_id_sha256"), "errors": data.get("errors"), "warnings": data.get("warnings")}
     if kind == "save_verification":
         return {
             "schema": data.get("schema"),
@@ -80,12 +89,16 @@ def summary(kind: str, data: dict[str, Any] | None) -> dict[str, Any] | None:
     if kind.startswith("save"):
         return {"schema": data.get("schema"), "tree_sha256": data.get("tree_sha256"), "file_count": data.get("file_count"), "progress_write_detected": data.get("progress_write_detected")}
     if kind == "acceptance":
-        return {"schema": data.get("schema"), "overall": data.get("overall"), "accepted": data.get("accepted"), "counts": data.get("counts"), "next_unproven_gate": data.get("next_unproven_gate")}
+        return {"schema": data.get("schema"), "overall": data.get("overall"), "accepted": data.get("accepted"), "counts": data.get("counts"), "next_unproven_gate": data.get("next_unproven_gate"), "run_id_sha256": data.get("run_id_sha256")}
     return {"schema": data.get("schema")}
 
 
 def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
-    structured_kinds = {"preflight", "session", "guard", "issues", "ledger", "save_before", "save_after", "save_relaunch", "save_verification", "acceptance"}
+    structured_kinds = {
+        "preflight", "session", "guard", "issues", "ledger", "run_record",
+        "run_context", "pe_imports", "contract", "save_before", "save_after",
+        "save_relaunch", "save_verification", "acceptance",
+    }
     files: list[dict[str, Any]] = []
     summaries: dict[str, Any] = {}
     for kind, path in inputs.items():
@@ -98,6 +111,11 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
 
     present = {f["kind"] for f in files}
     minimum_review = {"preflight", "session", "madeira_log"}.issubset(present)
+    context = summaries.get("run_context") or {}
+    contract = summaries.get("contract") or {}
+    imports = summaries.get("pe_imports") or {}
+    sealed_launch = bool(context.get("ready") and context.get("run_id_sha256") and contract.get("valid") and contract.get("run_id_sha256") == context.get("run_id_sha256"))
+    dependency_audit = bool(imports.get("valid") and imports.get("file_sha256") and imports.get("file_sha256") == (summaries.get("preflight") or {}).get("exe_sha256"))
     acceptance_complete = bool((summaries.get("acceptance") or {}).get("accepted"))
     save_machine_complete = bool((summaries.get("save_verification") or {}).get("machine_gate_pass"))
     integrity_warnings = []
@@ -114,6 +132,11 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
     if session and not session.get("deepest_stage") and "madeira_log" in present:
         integrity_warnings.append("A Madeira log is present but the structured session report proves no game stage; inspect whether the correct log was analyzed.")
 
+    if "run_context" in present and not sealed_launch:
+        integrity_warnings.append("Run context is present but the launch is not sealed to a matching valid evidence contract.")
+    if "pe_imports" in present and not dependency_audit:
+        integrity_warnings.append("PE dependency audit is present but does not validate against the owned executable identity.")
+
     save_verify = summaries.get("save_verification") or {}
     if save_verify and save_verify.get("progress_write_detected") and not save_verify.get("save_tree_survived_relaunch"):
         integrity_warnings.append("The game wrote save progress, but the exact post-progress save tree did not survive the relaunch. Save acceptance must fail until explained/fixed.")
@@ -125,6 +148,8 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
         "files": sorted(files, key=lambda x: x["kind"]),
         "summaries": summaries,
         "minimum_review_bundle_complete": minimum_review,
+        "sealed_launch_identity_complete": sealed_launch,
+        "pe_dependency_audit_complete": dependency_audit,
         "save_machine_verification_complete": save_machine_complete,
         "device_acceptance_complete": acceptance_complete,
         "integrity_warnings": integrity_warnings,
@@ -133,14 +158,19 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
             "save_contents_embedded": False,
             "absolute_paths_embedded": False,
             "credentials_embedded": False,
+            "proprietary_binaries_embedded": False,
         },
-        "rule": "Share the manifest plus only the raw evidence specifically needed for the current blocker. Never add Steam credentials, JIT pairing secrets, or proprietary game binaries.",
+        "rule": "Share the manifest plus only the raw evidence specifically needed for the current blocker. Never add Steam credentials, JIT pairing secrets, saves, or proprietary game binaries.",
     }
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Build a HunieCam/Madeira evidence manifest")
-    for name in ("preflight", "session", "guard", "issues", "ledger", "save-before", "save-after", "save-relaunch", "save-verification", "acceptance", "madeira-log", "unity-log"):
+    for name in (
+        "preflight", "session", "guard", "issues", "ledger", "run-record",
+        "run-context", "pe-imports", "contract", "save-before", "save-after",
+        "save-relaunch", "save-verification", "acceptance", "madeira-log", "unity-log",
+    ):
         p.add_argument(f"--{name}", dest=name.replace("-", "_"), type=pathlib.Path)
     p.add_argument("--json", dest="json_path", type=pathlib.Path, required=True)
     args = p.parse_args()
@@ -150,6 +180,10 @@ def main() -> int:
         "guard": args.guard,
         "issues": args.issues,
         "ledger": args.ledger,
+        "run_record": args.run_record,
+        "run_context": args.run_context,
+        "pe_imports": args.pe_imports,
+        "contract": args.contract,
         "save_before": args.save_before,
         "save_after": args.save_after,
         "save_relaunch": args.save_relaunch,
