@@ -59,6 +59,8 @@ enum DetroitVulkanDeviceGateLauncher {
         "vulkan_swapchain_probe.exe",
         gateExecutable,
     ]
+    private static let fnvOffset: UInt64 = 14_695_981_039_346_656_037
+    private static let fnvPrime: UInt64 = 1_099_511_628_211
 
     private enum GateError: LocalizedError {
         case payloadFolderMissing
@@ -98,6 +100,36 @@ enum DetroitVulkanDeviceGateLauncher {
             let url = root.appendingPathComponent($0, isDirectory: false)
             return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && !isDirectory.boolValue
         }
+    }
+
+    /// Same deliberately simple fingerprint algorithm used by the x86-64
+    /// Windows gate. It is an identity/check-for-staleness token, not a security
+    /// signature: changing any of the four executable bytes makes old physical
+    /// PASS proof invalid for the currently installed Madeira payload.
+    static func bundledPayloadFingerprint() throws -> UInt64 {
+        guard let root = payloadRoot else { throw GateError.payloadFolderMissing }
+        var hash = fnvOffset
+        let separator: UInt8 = 0xff
+
+        func absorb(_ bytes: some Sequence<UInt8>) {
+            for byte in bytes {
+                hash ^= UInt64(byte)
+                hash = hash &* fnvPrime
+            }
+        }
+
+        for name in payloadNames {
+            absorb(name.utf8)
+            absorb(CollectionOfOne(separator))
+            let url = root.appendingPathComponent(name, isDirectory: false)
+            guard FileManager.default.fileExists(atPath: url.path) else { throw GateError.payloadMissing(name) }
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            while let data = try handle.read(upToCount: 64 * 1024), !data.isEmpty {
+                absorb(data)
+            }
+        }
+        return hash
     }
 
     private static func peMachine(_ url: URL) throws -> UInt16 {
@@ -189,8 +221,9 @@ enum DetroitVulkanDeviceGateLauncher {
             return
         }
         do {
+            let expected = try bundledPayloadFingerprint()
             let entry = try prepareEntry()
-            LogStore.shared.log("[detroit-gate] one-tap physical-device test requested")
+            LogStore.shared.log(String(format: "[detroit-gate] one-tap physical-device test requested payload=%016llx", expected))
             // ContentView already observes this value and launches matching
             // library entries through jitReadyForLaunch -> runWineFullSequence.
             ShortcutRouter.shared.pendingExe = entry.windowsPath
@@ -202,6 +235,47 @@ enum DetroitVulkanDeviceGateLauncher {
     }
 }
 
+/// Strict reader for proof emitted by the x86-64 Windows controller after the
+/// physical iPad actually presents 120 frames. Merely having a file is not
+/// enough: every PASS marker must agree and its exact payload fingerprint must
+/// match the four canaries bundled in this installed Madeira build.
+@MainActor
+enum DetroitVulkanDeviceGateProof {
+    static let schema = "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"
+    static var url: URL {
+        LibraryModel.drive.appendingPathComponent("madeira-detroit-vulkan-gate.txt", isDirectory: false)
+    }
+
+    private static func fields() -> [String: String]? {
+        guard let data = try? Data(contentsOf: url), data.count > 0, data.count <= 4096,
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        var result: [String: String] = [:]
+        for raw in text.split(whereSeparator: \Character.isNewline) {
+            let line = String(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, let equals = line.firstIndex(of: "=") else { continue }
+            let key = String(line[..<equals])
+            let value = String(line[line.index(after: equals)...])
+            guard !key.isEmpty, result[key] == nil else { return nil }
+            result[key] = value
+        }
+        return result
+    }
+
+    static var validForCurrentPayload: Bool {
+        guard let values = fields(),
+              values["SCHEMA"] == schema,
+              values["ARCH"] == "x86_64-windows",
+              values["EXECUTION"] == "physical-device-local",
+              values["VULKAN_DEVICE"] == "PASS",
+              values["WIN32_SURFACE"] == "PASS",
+              values["PRESENTED_120_FRAMES"] == "PASS",
+              values["OVERALL"] == "PASS",
+              values["NEXT_GATE"] == "detroit-process-and-shader-compilation",
+              let expected = try? DetroitVulkanDeviceGateLauncher.bundledPayloadFingerprint() else { return false }
+        return values["PAYLOAD_FNV64"]?.lowercased() == String(format: "%016llx", expected)
+    }
+}
+
 private struct DetroitVulkanDeviceGateButton: View {
     @ObservedObject private var library = LibraryModel.shared
 
@@ -210,12 +284,16 @@ private struct DetroitVulkanDeviceGateButton: View {
            library.enabled,
            library.current == nil,
            !library.launching {
+            let passed = DetroitVulkanDeviceGateProof.validForCurrentPayload
             Button(action: DetroitVulkanDeviceGateLauncher.launch) {
-                Label("Detroit graphics test", systemImage: "checkmark.shield")
+                Label(passed ? "Detroit graphics test — Passed" : "Detroit graphics test",
+                      systemImage: passed ? "checkmark.shield.fill" : "checkmark.shield")
             }
             .buttonStyle(.borderedProminent)
             .padding(16)
-            .accessibilityHint("Runs the local Vulkan, Windows surface, and 120-frame graphics checks on this iPad.")
+            .accessibilityHint(passed
+                ? "This exact test payload passed the local Vulkan, Windows surface, and 120-frame checks on this iPad. Tap to run it again."
+                : "Runs the local Vulkan, Windows surface, and 120-frame graphics checks on this iPad.")
         }
     }
 }
