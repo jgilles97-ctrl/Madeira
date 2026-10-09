@@ -3,9 +3,9 @@
 
 These checks do not claim that Vulkan works on an iPad. They stop accidental
 regressions in the *contract* before expensive device testing: portable probes,
-Windows guest Vulkan semantics, real Win32 WSI coverage, static MoltenVK loader
-wiring, deterministic link inclusion, reversible non-Vulkan builds, and reuse
-of Madeira's existing Metal window lifetime path.
+Windows guest Vulkan semantics, real Win32 WSI and swapchain coverage, static
+MoltenVK loader wiring, deterministic link inclusion, reversible non-Vulkan
+builds, and reuse of Madeira's existing Metal window lifetime path.
 """
 
 from __future__ import annotations
@@ -59,6 +59,8 @@ def main() -> int:
     build = read("tests/x64/build-vulkan-probe.sh")
     wsi_probe = read("tests/x64/vulkan_wsi_probe.c")
     wsi_build = read("tests/x64/build-vulkan-wsi-probe.sh")
+    swapchain_probe = read("tests/x64/vulkan_swapchain_probe.c")
+    swapchain_build = read("tests/x64/build-vulkan-swapchain-probe.sh")
     surface = read("build/ntdll-unix/vulkan_surface_ios.c")
     header = read("build/ntdll-unix/vulkan_surface_ios.h")
     display = read("app/Madeira/IOSDisplayShim.m")
@@ -73,6 +75,7 @@ def main() -> int:
     # the Windows guest loader rather than accidentally bypass Wine.
     check_builder(build, "Detroit Vulkan probe builder")
     check_builder(wsi_build, "Detroit Vulkan WSI probe builder")
+    check_builder(swapchain_build, "Detroit Vulkan swapchain probe builder")
 
     for needle in (
         'LoadLibraryA("vulkan-1.dll")',
@@ -91,6 +94,8 @@ def main() -> int:
     require("enabled_device_exts" in probe,
             "headless probe reports portability subset but does not enable device extensions")
 
+    # WSI canary crosses the Win32 ABI boundary and proves the HWND can become a
+    # present-capable Vulkan surface before we add swapchain/rendering complexity.
     for needle in (
         'LoadLibraryA("vulkan-1.dll")',
         "CreateWindowExA",
@@ -107,6 +112,36 @@ def main() -> int:
         require(needle in wsi_probe, f"Vulkan WSI probe contract missing: {needle}")
     require("-luser32" in wsi_build.lower(), "WSI probe builder must link Win32 user32")
 
+    # Swapchain canary is the real presentation gate: a surface-only PASS is not
+    # enough. It must create swapchain images, render a clear through a render
+    # pass, acquire/submit/present repeatedly, and leave machine-readable proof.
+    for needle in (
+        'LoadLibraryA("vulkan-1.dll")',
+        "CreateWindowExA",
+        "vkCreateWin32SurfaceKHR",
+        "VK_KHR_SWAPCHAIN_EXTENSION_NAME",
+        "vkCreateSwapchainKHR",
+        "vkGetSwapchainImagesKHR",
+        "vkAcquireNextImageKHR",
+        "vkQueueSubmit",
+        "vkQueuePresentKHR",
+        "vkCmdBeginRenderPass",
+        "VK_ATTACHMENT_LOAD_OP_CLEAR",
+        "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR",
+        "TARGET_FRAMES 120u",
+        'printf("SWAPCHAIN=PASS',
+        'printf("CLEAR_PRESENT=PASS',
+        'printf("PRESENTED_FRAMES=%u',
+        'printf("RESULT=PASS',
+        "NEXT_GATE=detroit-process-and-shader-compilation",
+    ):
+        require(needle in swapchain_probe, f"Vulkan swapchain probe contract missing: {needle}")
+    require("VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME" in swapchain_probe,
+            "swapchain probe lost portability-subset device handling")
+    require("-luser32" in swapchain_build.lower(),
+            "swapchain probe builder must link Win32 user32")
+
+    # Reuse the exact Metal-layer path Madeira already keeps correct for DXMT.
     exported = (
         "macdrv_view_create_metal_view",
         "macdrv_view_get_metal_layer",
@@ -127,6 +162,8 @@ def main() -> int:
     require("metal_view" in header and "metal_layer" in header,
             "surface binding must preserve both retained view token and layer pointer")
 
+    # Static MoltenVK loader: win32u takes its normal SONAME_LIBVULKAN path,
+    # while dlopen/dlsym are redirected to direct static MoltenVK entry points.
     for needle in (
         "madeira_vulkan_dlopen",
         "madeira_vulkan_dlsym",
@@ -142,6 +179,8 @@ def main() -> int:
     require("SONAME_LIBVULKAN" in win32u_build, "Wine vulkan.c is not forced through its Vulkan-enabled path")
     require("libMoltenVK.a" in win32u_build, "MoltenVK archive is not merged into the app-facing win32u archive")
 
+    # User-driver side: map guest Win32 surfaces to Metal and hand Wine a real
+    # pVulkanInit callback instead of the nulldrv STATUS_NOT_IMPLEMENTED slot.
     for needle in (
         "winios_pVulkanInit",
         "vkCreateMetalSurfaceEXT",
@@ -154,6 +193,9 @@ def main() -> int:
     ):
         require(needle in ios_driver, f"iOS Vulkan driver contract missing: {needle}")
 
+    # The build must compile the WSI pieces, and the generated driver must carry
+    # a STRONG reference. Weak pVulkanInit inside a static archive can be left
+    # unextracted by the linker, silently reverting to Wine's null Vulkan driver.
     require("vulkan_driver_ios.c" in win32u_build,
             "win32u build does not compile the iOS Vulkan user-driver")
     require("vulkan_surface_ios.c" in win32u_build,
@@ -169,6 +211,9 @@ def main() -> int:
     require("winios_user_driver.pVulkanInit = winios_pVulkanInit" in patched_driver,
             "generated Vulkan driver does not wire pVulkanInit")
 
+    # Reversibility: normal builds start with the historical driver, and
+    # Detroit-only objects are removed first so MADEIRA_VULKAN=0 cannot inherit
+    # artifacts from a prior Vulkan-enabled build.
     require('VULKAN_DRIVER_SOURCE="$BUILD_DIR/driver_ios.c"' in win32u_build,
             "normal win32u build no longer defaults to the unpatched driver source")
     for stale in ("vulkan_static_ios.o", "vulkan_driver_ios.o", "vulkan_surface_ios.o"):
@@ -177,6 +222,7 @@ def main() -> int:
 
     print("PASS portable Windows Vulkan headless probe contract")
     print("PASS portable Windows Vulkan WSI probe contract")
+    print("PASS real swapchain clear/present canary contract")
     print("PASS static MoltenVK loader contract")
     print("PASS Wine iOS pVulkanInit / Metal-surface contract")
     print("PASS strong static-link inclusion contract")
