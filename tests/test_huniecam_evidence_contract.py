@@ -12,12 +12,12 @@ SPEC.loader.exec_module(mod)
 
 
 def preflight(exe_hash="abc"):
-    return {"schema": "MADEIRA_HUNIECAM_PROBE_V3", "identity": {"exe_sha256": exe_hash}}
+    return {"schema": "MADEIRA_HUNIECAM_PROBE_V4", "identity": {"exe_sha256": exe_hash}}
 
 
-def session(exe_hash="abc", stage=75):
+def session(exe_hash="abc", stage=75, schema="MADEIRA_HUNIECAM_SESSION_V3"):
     return {
-        "schema": "MADEIRA_HUNIECAM_SESSION_V2",
+        "schema": schema,
         "deepest_stage": stage,
         "preflight": {"identity": {"exe_sha256": exe_hash}},
         "evidence": {"madeira_log_present": True},
@@ -34,15 +34,20 @@ def run_record(exe_hash="abc", stage=75):
 
 
 class HunieCamEvidenceContractTests(unittest.TestCase):
-    def test_matching_evidence_is_valid(self):
+    def test_matching_current_evidence_is_valid(self):
         report = mod.validate(
             preflight(), session(),
-            {"schema": "MADEIRA_HUNIECAM_CONFIG_GUARD_V1", "status": "PASS"},
+            {"schema": "MADEIRA_HUNIECAM_CONFIG_GUARD_V2", "status": "PASS"},
             {"schema": "MADEIRA_HUNIECAM_PERFORMANCE_V2", "comparison_clean": True, "fps_cap": {"expected": 60, "effective": True}},
             run_record(),
         )
         self.assertTrue(report["valid"])
         self.assertFalse(report["errors"])
+        self.assertEqual(report["artifact_schemas"]["session"], "MADEIRA_HUNIECAM_SESSION_V3")
+
+    def test_legacy_session_v2_remains_readable(self):
+        report = mod.validate(preflight(), session(schema="MADEIRA_HUNIECAM_SESSION_V2"))
+        self.assertTrue(report["valid"])
 
     def test_session_from_other_exe_is_rejected(self):
         report = mod.validate(preflight("aaa"), session("bbb"))
@@ -50,7 +55,7 @@ class HunieCamEvidenceContractTests(unittest.TestCase):
         self.assertTrue(any("Session embedded executable hash" in x for x in report["errors"]))
 
     def test_guard_rejected_profile_is_invalid(self):
-        guard = {"schema": "MADEIRA_HUNIECAM_CONFIG_GUARD_V1", "status": "FAIL"}
+        guard = {"schema": "MADEIRA_HUNIECAM_CONFIG_GUARD_V2", "status": "FAIL"}
         report = mod.validate(preflight(), session(), guard)
         self.assertFalse(report["valid"])
 
@@ -71,7 +76,7 @@ class HunieCamEvidenceContractTests(unittest.TestCase):
         report = mod.validate(preflight(), session(), performance=perf)
         self.assertTrue(report["valid"])
         self.assertTrue(report["warnings"])
-        accepted = {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V3", "accepted": True}
+        accepted = {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V4", "accepted": True}
         report2 = mod.validate(preflight(), session(), performance=perf, acceptance=accepted)
         self.assertFalse(report2["valid"])
 
