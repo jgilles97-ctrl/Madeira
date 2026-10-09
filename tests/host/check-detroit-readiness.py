@@ -30,6 +30,16 @@ def code_map(report: dict[str, object]) -> dict[str, dict[str, object]]:
     return {str(c["code"]): c for c in checks if isinstance(c, dict)}
 
 
+def baseline_env(extra: str = "") -> str:
+    return (
+        "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n"
+        "env.MVK_DTR_MSL_LIBRARY_CACHE = 0\n"
+        "env.MVK_DTR_MSL_LIBRARY_DISK_CACHE = 1\n"
+        "env.MADEIRA_DEVICE_STATS = 1\n"
+        + extra
+    )
+
+
 def test_clean_fixture(root: pathlib.Path) -> None:
     game = root / "Detroit"
     game.mkdir()
@@ -40,13 +50,7 @@ def test_clean_fixture(root: pathlib.Path) -> None:
     cache.mkdir()
     (cache / "pipeline.bin").write_bytes(b"cache")
     env = root / "madeira.cfg"
-    env.write_text(
-        "# comments and spacing should not confuse the parser\n"
-        "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n"
-        "env.MVK_DTR_MSL_LIBRARY_CACHE = 0\n"
-        "env.MADEIRA_DEVICE_STATS = 1\n",
-        encoding="utf-8",
-    )
+    env.write_text("# comments should be ignored\n" + baseline_env(), encoding="utf-8")
     log = root / "madeira-log.txt"
     log.write_text("Detroit boot\nCompiling Shaders 50%\nmenu reached\n", encoding="utf-8")
 
@@ -58,16 +62,16 @@ def test_clean_fixture(root: pathlib.Path) -> None:
     require(checks["shader_compression"]["status"] == "PASS", "compression should pass")
     require("concurrent_compilation_ios_noop" not in checks,
             "clean iPad profile should not need a macOS-only concurrency setting")
-    require(checks["dtr_msl_library_cache"]["status"] == "PASS", "custom MSL cache=0 should pass")
+    require(checks["dtr_msl_library_cache"]["status"] == "PASS", "process Metal cache=0 should pass")
+    require(checks["dtr_msl_library_disk_cache"]["status"] == "PASS", "persistent disk cache=1 should pass")
+    require(checks["dtr_cache_split"]["status"] == "PASS", "qualified low-memory cache split should pass")
     require(checks["device_stats"]["status"] == "PASS", "device diagnostics should pass")
 
 
 def test_mac_concurrency_setting_is_informational_on_ios(root: pathlib.Path) -> None:
     env = root / "madeira.cfg"
     env.write_text(
-        "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n"
-        "env.MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION = 1\n"
-        "env.MVK_DTR_MSL_LIBRARY_CACHE = 0\n",
+        baseline_env("env.MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION = 1\n"),
         encoding="utf-8",
     )
     report = mod.audit(None, None, None, env, None)
@@ -78,29 +82,63 @@ def test_mac_concurrency_setting_is_informational_on_ios(root: pathlib.Path) -> 
             "an iOS-ineffective setting alone must not downgrade readiness")
 
 
-def test_release003_msl_cache_warns(root: pathlib.Path) -> None:
+def test_release003_process_cache_warns(root: pathlib.Path) -> None:
     env = root / "madeira.cfg"
     env.write_text(
         "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n"
-        "env.MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION = 1\n"
-        "env.MVK_DTR_MSL_LIBRARY_CACHE = 1\n",
+        "env.MVK_DTR_MSL_LIBRARY_CACHE = 1\n"
+        "env.MVK_DTR_MSL_LIBRARY_DISK_CACHE = 1\n",
         encoding="utf-8",
     )
     report = mod.audit(None, None, None, env, None)
     checks = code_map(report)
-    require(report["overall"] == "CAUTION", "Release003 process-wide MSL cache should warn on 8 GB baseline")
-    require(checks["concurrent_compilation_ios_noop"]["status"] == "INFO",
-            "concurrency=1 must not be mislabeled as the memory risk on iOS")
-    require(checks["dtr_msl_library_cache"]["status"] == "WARN", "Release003 cache=1 should warn")
+    require(report["overall"] == "CAUTION", "process-wide MSL retention should warn on 8 GB baseline")
+    require(checks["dtr_msl_library_cache"]["status"] == "WARN", "process cache=1 should warn")
+    require(checks["dtr_msl_library_disk_cache"]["status"] == "PASS", "disk cache remains valid independently")
+    require("dtr_cache_split" not in checks, "unsafe process-cache setting must not claim low-memory split")
 
 
-def test_missing_release003_cache_setting_warns(root: pathlib.Path) -> None:
+def test_missing_process_cache_setting_warns(root: pathlib.Path) -> None:
     env = root / "madeira.cfg"
-    env.write_text("MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3\n", encoding="utf-8")
+    env.write_text(
+        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3\n"
+        "MVK_DTR_MSL_LIBRARY_DISK_CACHE=1\n",
+        encoding="utf-8",
+    )
     report = mod.audit(None, None, None, env, None)
     checks = code_map(report)
     require(checks["dtr_msl_library_cache"]["status"] == "WARN",
-            "Release003 default-on MSL cache must be explicit for the 8 GB baseline")
+            "Release003 process cache must be explicitly disabled for the 8 GB baseline")
+
+
+def test_missing_disk_cache_setting_warns(root: pathlib.Path) -> None:
+    env = root / "madeira.cfg"
+    env.write_text(
+        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3\n"
+        "MVK_DTR_MSL_LIBRARY_CACHE=0\n",
+        encoding="utf-8",
+    )
+    report = mod.audit(None, None, None, env, None)
+    checks = code_map(report)
+    require(report["overall"] == "CAUTION", "missing persistent disk cache must not be qualified as ready")
+    require(checks["dtr_msl_library_disk_cache"]["status"] == "WARN",
+            "missing disk-cache switch should warn")
+    require("dtr_cache_split" not in checks, "incomplete cache split must not receive PASS")
+
+
+def test_disabled_disk_cache_warns(root: pathlib.Path) -> None:
+    env = root / "madeira.cfg"
+    env.write_text(
+        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3\n"
+        "MVK_DTR_MSL_LIBRARY_CACHE=0\n"
+        "MVK_DTR_MSL_LIBRARY_DISK_CACHE=0\n",
+        encoding="utf-8",
+    )
+    report = mod.audit(None, None, None, env, None)
+    checks = code_map(report)
+    require(checks["dtr_msl_library_cache"]["status"] == "PASS", "RAM-safe process cache should still pass")
+    require(checks["dtr_msl_library_disk_cache"]["status"] == "WARN", "disabled persistent cache should warn")
+    require(report["overall"] == "CAUTION", "RAM-safe but non-qualified cache profile should be caution")
 
 
 def test_last_assignment_wins_and_comments_are_ignored(root: pathlib.Path) -> None:
@@ -109,13 +147,18 @@ def test_last_assignment_wins_and_comments_are_ignored(root: pathlib.Path) -> No
         "# env.MVK_DTR_MSL_LIBRARY_CACHE = 1\n"
         "env.MVK_DTR_MSL_LIBRARY_CACHE = 1 # old experiment\n"
         "env.MVK_DTR_MSL_LIBRARY_CACHE = 0 # final override\n"
+        "env.MVK_DTR_MSL_LIBRARY_DISK_CACHE = 0 # old experiment\n"
+        "env.MVK_DTR_MSL_LIBRARY_DISK_CACHE = 1 # final override\n"
         "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3\n",
         encoding="utf-8",
     )
     report = mod.audit(None, None, None, env, None)
     checks = code_map(report)
     require(checks["dtr_msl_library_cache"]["status"] == "PASS",
-            "last active assignment should win over comments and earlier value")
+            "last active process-cache assignment should win")
+    require(checks["dtr_msl_library_disk_cache"]["status"] == "PASS",
+            "last active disk-cache assignment should win")
+    require(checks["dtr_cache_split"]["status"] == "PASS", "final settings should form qualified split")
 
 
 def test_known_shader_failures(root: pathlib.Path) -> None:
@@ -166,6 +209,20 @@ def test_vulkan_loader_layer_failures(root: pathlib.Path) -> None:
     require(report["overall"] == "BLOCKED", "guest/driver Vulkan failures must block Detroit")
 
 
+def test_device_lost_and_gpu_oom_are_blocking(root: pathlib.Path) -> None:
+    log = root / "gpu.log"
+    log.write_text(
+        "vkQueuePresentKHR returned VK_ERROR_DEVICE_LOST\n"
+        "MoltenVK: VK_ERROR_OUT_OF_DEVICE_MEMORY while compiling pipeline\n",
+        encoding="utf-8",
+    )
+    report = mod.audit(None, None, None, None, log)
+    checks = code_map(report)
+    require(checks["vulkan_device_lost"]["status"] == "FAIL", "device loss should be classified explicitly")
+    require(checks["memory_pressure"]["status"] == "FAIL", "Vulkan GPU OOM should feed the shared memory-pressure class")
+    require(report["overall"] == "BLOCKED", "device loss / GPU OOM cannot qualify a run")
+
+
 def test_no_destructive_behavior(root: pathlib.Path) -> None:
     cache = root / "ShaderCache"
     cache.mkdir()
@@ -181,11 +238,14 @@ def main() -> int:
     for test in (
         test_clean_fixture,
         test_mac_concurrency_setting_is_informational_on_ios,
-        test_release003_msl_cache_warns,
-        test_missing_release003_cache_setting_warns,
+        test_release003_process_cache_warns,
+        test_missing_process_cache_setting_warns,
+        test_missing_disk_cache_setting_warns,
+        test_disabled_disk_cache_warns,
         test_last_assignment_wins_and_comments_are_ignored,
         test_known_shader_failures,
         test_vulkan_loader_layer_failures,
+        test_device_lost_and_gpu_oom_are_blocking,
         test_no_destructive_behavior,
     ):
         with tempfile.TemporaryDirectory() as tmp:
