@@ -65,7 +65,6 @@ def run(
     issues = issue_matcher.match(combined_text, pre)
     perf = performance_tool.analyze(combined_text, expected_fps=fps)
     failure_capsule = failure_capsule_tool.extract(combined_text)
-    nxt = next_run.choose(session, issues, ledger)
 
     profile = {
         "launch_mode": launch_mode,
@@ -79,6 +78,10 @@ def run(
     }
     record = run_record_tool.build(pre, session, profile, perf)
     contract = evidence_contract.validate(pre, session, guard, perf, record)
+    # The next-run engine must consume the same validated evidence it is about
+    # to advise on. This prevents a reached-scene run from jumping to final
+    # acceptance when the profile/evidence/performance controls failed.
+    nxt = next_run.choose(session, issues, ledger, guard, perf, contract)
     registry = registry_snapshot_tool.snapshot(registry_text) if registry_text else None
 
     paths = {
