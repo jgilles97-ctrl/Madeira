@@ -16,19 +16,26 @@ import re
 import struct
 from typing import Iterable
 
-SCHEMA = "MADEIRA_HUNIECAM_PROBE_V2"
+SCHEMA = "MADEIRA_HUNIECAM_PROBE_V3"
 TITLE = "HunieCam Studio"
 EXPECTED_EXE = "HunieCamStudio.exe"
 KNOWN_STEAM_APP_ID = 426000
 KNOWN_PUBLIC_BUILD_ID = 8271768
 KNOWN_WINDOWS_DEPOT_ID = 426001
 KNOWN_WINDOWS_DEPOT_MIB = 686.61
+KNOWN_WINDOWS_DEPOT_LAST_PUBLIC_UPDATE = "2020-07-18T09:12:08Z"
+KNOWN_WINDOWS_LAUNCH_EXE = "HunieCamStudio.exe"
+KNOWN_WINDOWS_LAUNCH_ARGUMENTS = ""
 KNOWN_UNITY_VERSION = "5.3.4f1"
 UNITY_VERSION_RE = re.compile(rb"(?<![0-9A-Za-z])([0-9]{1,4}\.[0-9]+\.[0-9]+[a-z][0-9]+)(?![0-9A-Za-z])")
 
 EXPECTED_LAYOUT = (
     "Managed/Assembly-CSharp.dll",
     "Managed/Assembly-CSharp-firstpass.dll",
+    "Managed/mscorlib.dll",
+    "Managed/System.dll",
+    "Managed/UnityEngine.dll",
+    "Managed/UnityEngine.UI.dll",
     "Mono/mono.dll",
     "Plugins/CSteamworks.dll",
     "Plugins/steam_api.dll",
@@ -113,8 +120,7 @@ def tree_size(root: pathlib.Path) -> tuple[int, int]:
     files = 0
     total = 0
     try:
-        iterator = root.rglob("*")
-        for p in iterator:
+        for p in root.rglob("*"):
             try:
                 if p.is_file():
                     files += 1
@@ -150,6 +156,9 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
             "steam_build_id": KNOWN_PUBLIC_BUILD_ID,
             "windows_depot_id": KNOWN_WINDOWS_DEPOT_ID,
             "windows_depot_size_mib": KNOWN_WINDOWS_DEPOT_MIB,
+            "windows_depot_last_public_update": KNOWN_WINDOWS_DEPOT_LAST_PUBLIC_UPDATE,
+            "windows_launch_executable": KNOWN_WINDOWS_LAUNCH_EXE,
+            "windows_launch_arguments": KNOWN_WINDOWS_LAUNCH_ARGUMENTS,
             "unity_version": KNOWN_UNITY_VERSION,
             "note": "Reference only; the owned files are authoritative.",
         },
@@ -200,6 +209,7 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     csteamworks = _first_existing(data_index, ["Plugins/CSteamworks.dll"])
     global_manager = _first_existing(data_index, ["globalgamemanagers"])
     top_steam_api = _first_existing(root_index, ["steam_api.dll"])
+    gameassembly = _first_existing(root_index, ["GameAssembly.dll"])
     output_log = _first_existing(data_index, ["output_log.txt"])
     unity_scan_paths = [p for p in (global_manager, exe) if p is not None]
     unity_versions = scan_unity_versions(unity_scan_paths)
@@ -208,16 +218,21 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     identity["install_files_seen"] = files
     identity["install_bytes_seen"] = bytes_total
     identity["install_mib_seen"] = round(bytes_total / (1024 * 1024), 2)
+    identity["public_size_delta_mib"] = round(identity["install_mib_seen"] - KNOWN_WINDOWS_DEPOT_MIB, 2)  # type: ignore[operator]
     if managed:
         identity["assembly_csharp_sha256"] = sha256_file(managed)
     if mono:
         identity["unity_mono_sha256"] = sha256_file(mono)
-    if top_steam_api:
-        identity["root_steam_api_sha256"] = sha256_file(top_steam_api)
+    root_steam_hash = sha256_file(top_steam_api) if top_steam_api else None
+    plugin_steam_hash = sha256_file(plugin_steam_api) if plugin_steam_api else None
+    if root_steam_hash:
+        identity["root_steam_api_sha256"] = root_steam_hash
+    if plugin_steam_hash:
+        identity["plugin_steam_api_sha256"] = plugin_steam_hash
+    if root_steam_hash and plugin_steam_hash:
+        identity["steam_api_copies_identical"] = root_steam_hash == plugin_steam_hash
 
-    layout_hits: dict[str, bool] = {}
-    for rel in EXPECTED_LAYOUT:
-        layout_hits[rel] = rel.casefold() in data_index
+    layout_hits: dict[str, bool] = {rel: rel.casefold() in data_index for rel in EXPECTED_LAYOUT}
     layout_score = sum(layout_hits.values())
     depot_shape: dict[str, object] = report["depot_shape"]  # type: ignore[assignment]
     depot_shape.update({
@@ -225,7 +240,7 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
         "matched": layout_score,
         "total": len(EXPECTED_LAYOUT),
         "root_steam_api_found": top_steam_api is not None,
-        "looks_like_known_windows_depot": layout_score >= 6 and top_steam_api is not None,
+        "looks_like_known_windows_depot": layout_score >= 9 and top_steam_api is not None,
     })
 
     signals: dict[str, object] = report["runtime_signals"]  # type: ignore[assignment]
@@ -234,9 +249,13 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
         "managed_assembly_found": managed is not None,
         "firstpass_assembly_found": firstpass is not None,
         "bundled_unity_mono_found": mono is not None,
+        "mono_runtime_found": mono is not None,
+        "gameassembly_found": gameassembly is not None,
+        "runtime_family": "Unity Mono" if mono and not gameassembly else "IL2CPP/unexpected" if gameassembly else "unknown",
         "wine_mono_required_for_game_runtime": False if mono else None,
         "plugin_steam_api_found": plugin_steam_api is not None,
         "root_steam_api_found": top_steam_api is not None,
+        "steam_api_copies_identical": root_steam_hash == plugin_steam_hash if root_steam_hash and plugin_steam_hash else None,
         "csteamworks_found": csteamworks is not None,
         "unity_versions_seen": unity_versions,
         "unity_output_log_found": output_log is not None,
@@ -252,18 +271,20 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     elif arch:
         warnings.append(f"Unexpected Windows executable architecture: {arch}; re-check the owned build before tuning Madeira.")
 
-    if mono and managed:
-        findings.append("HunieCam ships its own Unity Mono runtime and managed assemblies. Madeira's downloadable Wine Mono is not a prerequisite for this game.")
+    if mono and managed and not gameassembly:
+        findings.append("HunieCam ships its own Unity Mono runtime and managed assemblies. Madeira's downloadable Wine Mono is not a prerequisite for this game, and IL2CPP-specific workarounds are not transferable by default.")
     else:
-        warnings.append("Expected bundled Unity Mono/managed files were not both found; the install may be incomplete or a different store/build layout.")
+        warnings.append("Expected classic Unity Mono signals were incomplete or GameAssembly.dll was present; do not apply the HunieCam Mono plan until the actual runtime family is understood.")
 
-    if layout_score >= 6 and top_steam_api:
+    if layout_score >= 9 and top_steam_api:
         findings.append("The install layout strongly matches the known Windows Steam depot shape.")
     else:
         warnings.append(f"Only {layout_score}/{len(EXPECTED_LAYOUT)} known Unity/depot layout signals matched; treat public metadata as guidance only.")
 
     if top_steam_api and plugin_steam_api:
-        findings.append("Steam API DLLs exist both beside the EXE and inside Unity Plugins. Keep the launch working directory at the game install folder/program folder; Madeira already defaults direct launches this way.")
+        findings.append("Steam API DLLs exist both beside the EXE and inside Unity Plugins. Keep the launch working directory at the game install/program folder; Steam's official Windows launch entry also starts HunieCamStudio.exe directly with no arguments.")
+        if root_steam_hash != plugin_steam_hash:
+            warnings.append("The two steam_api.dll copies differ in the owned install. Preserve both and verify which copy the game loads; do not overwrite one with the other just to make hashes match.")
 
     if unity_versions:
         findings.append("Unity version string(s) found in the owned files: " + ", ".join(unity_versions))
@@ -276,10 +297,11 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     route: dict[str, object] = report["route"]  # type: ignore[assignment]
     route.update({
         "cpu": "Madeira WoW64 + FEX x86" if is_i386 else "verify from PE result",
-        "runtime": "game-bundled Unity Mono" if mono else "verify from install",
+        "runtime": "game-bundled Unity Mono" if mono and not gameassembly else "verify from install",
         "wine_mono_download": "not needed for HunieCam's own Unity runtime" if mono else "not determined",
         "graphics_baseline": "DXMT Direct3D 9 emulated frontend",
         "unity_arguments_baseline": "",
+        "official_steam_windows_launch": {"executable": KNOWN_WINDOWS_LAUNCH_EXE, "arguments": KNOWN_WINDOWS_LAUNCH_ARGUMENTS},
         "resolution_baseline": "1280x720",
         "fps_baseline": 60,
         "working_directory": "game/program folder (Madeira direct-launch default)",
@@ -292,14 +314,14 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
 
     experiments.extend([
         {
-            "when": "Unity output log unexpectedly selects Direct3D 11",
+            "when": "Unity output log unexpectedly selects Direct3D 11 or graphics init fails before D3D9 is proven",
             "change": "launch argument: -force-d3d9",
             "reason": "Old Unity Windows players support -force-d3d9; do not add it when D3D9 is already selected.",
         },
         {
-            "when": "Unity/Mono reaches managed startup but the Madeira log shows repeated protected-memory store faults or [store-undecoded]",
+            "when": "Unity/Mono reaches managed startup and the first failure is a real protected-memory store encoding, not insn=0xd4200000",
             "change": "per-game config: env.MADEIRA_WOW_RWX_PLAIN = 1",
-            "reason": "Current Madeira auto-matches Wine Mono, not Unity's bundled Mono. Use only as a one-variable WoW64 A/B experiment.",
+            "reason": "Current Madeira auto-matches Wine Mono, not Unity's bundled Mono. Use only as a one-variable WoW64 A/B experiment. A 0xd4200000 guest breakpoint belongs to a different runtime-bug family (#173).",
         },
         {
             "when": "Unity selects D3D9 and CPU/Mono startup succeeds, but rendering still crashes/corrupts",
@@ -312,8 +334,10 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
         "Use this current-upstream compatibility branch and confirm JIT + Memory+ are ready before launch.",
         "Create an isolated HunieCam library entry pointing at HunieCamStudio.exe; leave the original game copy untouched.",
         "Use direct launch first with the program folder as the working folder, 1280x720, 60 FPS, default D3D9 routing, and no speculative config switches.",
+        "Before any non-default run, pass its config and arguments through tools/huniecam_config_guard.py.",
         "After the first run export madeira-log.txt and copy HunieCamStudio_Data/output_log.txt if Unity created it.",
-        "Run tools/huniecam_session_triage.py so the next experiment is chosen from evidence, one variable at a time.",
+        "Run tools/huniecam_session_triage.py and tools/huniecam_issue_matcher.py so the next experiment is chosen from evidence, one variable at a time.",
+        "Record each serious run in tools/huniecam_attempt_ledger.py; promote a profile only when it moves the deepest proven stage or is a deliberate repeatability/acceptance run.",
         "Once startup works, verify pointer alignment, audio, disposable save/relaunch, 30-minute stability, three cold launches, and suspend/resume.",
     ])
     return report
