@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run the HunieCam compatibility analysis pipeline without touching game files.
 
-Cycle 6 Pipeline V7 seals one launch to its exact build/profile/session/log,
-guard/performance evidence, owned EXE imports and owned native-module set. It
-also emits a conservative dependency decision and a run-linked device form.
+Cycle 7 Pipeline V8 preserves the sealed build/profile/session/log/guard/
+performance/dependency chain and now emits Device Evidence V3, whose physical
+iPad form includes HunieCam-specific gameplay drag/release trials.
 """
 from __future__ import annotations
 import argparse, json, pathlib
@@ -25,7 +25,7 @@ import huniecam_run_context as run_context_tool
 import huniecam_run_record as run_record_tool
 import huniecam_session_triage as session_triage
 import huniecam_storage_guard as storage_guard
-SCHEMA="MADEIRA_HUNIECAM_PIPELINE_V7"
+SCHEMA="MADEIRA_HUNIECAM_PIPELINE_V8"
 
 def read_text(path:pathlib.Path|None)->str: return path.read_text(encoding="utf-8",errors="replace") if path else ""
 def write_json(path:pathlib.Path,data:dict[str,Any])->None: path.write_text(json.dumps(data,indent=2,sort_keys=True)+"\n",encoding="utf-8")
@@ -53,7 +53,7 @@ def run(install:pathlib.Path,madeira_log:pathlib.Path,unity_log:pathlib.Path|Non
     if registry_path: output_names.append(registry_path.name)
     if storage_path: output_names.append(storage_path.name)
     categories=pe_imports.get("categories") if isinstance(pe_imports.get("categories"),dict) else {}
-    summary={"schema":SCHEMA,"output_directory":out_dir.name,"guard_status":guard.get("status"),"evidence_contract_valid":contract.get("valid"),"run_context_v2_complete":contract.get("run_context_v2_complete"),"run_record_ready":record.get("ready_for_comparison"),"run_context_ready":run_context.get("ready"),"run_id_sha256":run_context.get("run_id_sha256"),"native_module_set_sha256":run_context.get("native_module_set_sha256"),"device_template_linked":bool(device_template.get("run_id_sha256") and device_template.get("run_id_sha256")==run_context.get("run_id_sha256")),"owned_build_fingerprint":(record.get("build") or {}).get("fingerprint_sha256") if isinstance(record.get("build"),dict) else None,"deepest_stage":session.get("deepest_stage"),"deepest_stage_name":session.get("deepest_stage_name"),"best_upstream_issue_match":(issues.get("best_match") or {}).get("issue") if isinstance(issues.get("best_match"),dict) else None,"failure_capsule_signature":capsule.get("signature"),"performance_comparison_clean":perf.get("comparison_clean"),"fps_cap_effective":((perf.get("fps_cap") or {}).get("effective") if isinstance(perf.get("fps_cap"),dict) else None),"pe_import_audit_valid":pe_imports.get("valid"),"native_module_audit_valid":native_modules.get("valid"),"native_module_count":native_modules.get("module_count"),"pe_import_count":pe_imports.get("import_count"),"pe_dependency_categories":sorted(categories),"dependency_plan_status":dependency_plan.get("status"),"registry_configuration_found":registry.get("found") if registry else None,"next_run_status":nxt.get("status"),"next_run_priority":nxt.get("priority"),"next_run_profile":nxt.get("profile"),"storage_large_jit_dumps":storage.get("large_jit_dump_count") if storage else None,"evidence_manifest":manifest_path.name,"device_evidence_template":paths["device_template"].name,"outputs":output_names,"rule":"Do not run guard-rejected profiles, mix run IDs, reuse device forms across launches, or change dependencies without exact owned-module/runtime evidence."}
+    summary={"schema":SCHEMA,"output_directory":out_dir.name,"guard_status":guard.get("status"),"evidence_contract_valid":contract.get("valid"),"run_context_v2_complete":contract.get("run_context_v2_complete"),"run_record_ready":record.get("ready_for_comparison"),"run_context_ready":run_context.get("ready"),"run_id_sha256":run_context.get("run_id_sha256"),"native_module_set_sha256":run_context.get("native_module_set_sha256"),"device_template_schema":device_template.get("schema"),"device_template_linked":bool(device_template.get("run_id_sha256") and device_template.get("run_id_sha256")==run_context.get("run_id_sha256")),"owned_build_fingerprint":(record.get("build") or {}).get("fingerprint_sha256") if isinstance(record.get("build"),dict) else None,"deepest_stage":session.get("deepest_stage"),"deepest_stage_name":session.get("deepest_stage_name"),"best_upstream_issue_match":(issues.get("best_match") or {}).get("issue") if isinstance(issues.get("best_match"),dict) else None,"failure_capsule_signature":capsule.get("signature"),"performance_comparison_clean":perf.get("comparison_clean"),"fps_cap_effective":((perf.get("fps_cap") or {}).get("effective") if isinstance(perf.get("fps_cap"),dict) else None),"pe_import_audit_valid":pe_imports.get("valid"),"native_module_audit_valid":native_modules.get("valid"),"native_module_count":native_modules.get("module_count"),"pe_import_count":pe_imports.get("import_count"),"pe_dependency_categories":sorted(categories),"dependency_plan_status":dependency_plan.get("status"),"registry_configuration_found":registry.get("found") if registry else None,"next_run_status":nxt.get("status"),"next_run_priority":nxt.get("priority"),"next_run_profile":nxt.get("profile"),"storage_large_jit_dumps":storage.get("large_jit_dump_count") if storage else None,"evidence_manifest":manifest_path.name,"device_evidence_template":paths["device_template"].name,"outputs":output_names,"rule":"Do not run guard-rejected profiles, mix run IDs, reuse device forms across launches, or change dependencies without exact owned-module/runtime evidence. Physical acceptance must prove drag release in real HunieCam gameplay."}
     write_json(out_dir/"huniecam-pipeline-summary.json",summary); return summary
 
 def main()->int:
