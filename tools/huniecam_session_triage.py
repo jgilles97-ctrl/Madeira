@@ -12,7 +12,7 @@ import pathlib
 import re
 from dataclasses import dataclass
 
-SCHEMA = "MADEIRA_HUNIECAM_SESSION_V1"
+SCHEMA = "MADEIRA_HUNIECAM_SESSION_V2"
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,12 @@ MADEIRA_MARKERS = (
            "The Direct3D 9 path appears in the Madeira log."),
     Marker("presenting", re.compile(r"(?:Game is presenting|\[present\]|presented frame)", re.I), 60,
            "The runtime reached a presenting/rendering state."),
+    Marker("hardware_pointer", re.compile(r"\[hwinput\].*(?:mouse|pointer|focus|absolute|GCMouse)", re.I), 62,
+           "Madeira's hardware pointer path was active."),
+    Marker("windows_cursor", re.compile(r"\[winios\].*cursor set", re.I), 63,
+           "The Windows cursor bridge published a cursor image."),
+    Marker("wow_rwx_plain", re.compile(r"\[wow-rwx\].*(?:plain read/write|RWX memory is plain)", re.I), 64,
+           "The WoW64 plain-RWX path was actually active during this run."),
 )
 
 UNITY_MARKERS = (
@@ -49,6 +55,8 @@ UNITY_MARKERS = (
            "The game's main managed assembly was loaded."),
     Marker("input_init", re.compile(r"Input.*Initialized|Initialize input|Using input", re.I), 70,
            "Unity reported input initialization."),
+    Marker("audio_init", re.compile(r"(?:FMOD.*(?:initialized|driver)|AudioManager.*(?:initialized|created)|audio.*initialized)", re.I), 71,
+           "Unity reported an audio subsystem reaching initialization."),
     Marker("first_scene", re.compile(r"UnloadTime:|Unloading .* unused Assets|Loaded scene", re.I), 75,
            "Unity progressed beyond early engine/assembly startup into scene/asset work."),
 )
@@ -56,16 +64,23 @@ UNITY_MARKERS = (
 FATALS = (
     ("jit_missing", re.compile(r"\[jit-debugger\]\s*attached=0\s+at the pool request", re.I)),
     ("wow_map_refused", re.compile(r"\[wow-window\].*refused.*map too small", re.I)),
+    # Generic store-undecoded is kept, but choose_next distinguishes the known
+    # AArch64 BRK/guest-INT3 encoding from an actual store instruction.
     ("store_undecoded", re.compile(r"\[store-undecoded\]", re.I)),
+    ("guest_breakpoint_misclassified", re.compile(r"\[store-undecoded\].*insn=0xd4200000", re.I)),
+    ("writecopy_image_fault", re.compile(r"\[wr-strip-declined\].*SEC_IMAGE\s+WRITECOPY", re.I)),
+    ("redelivery_storm", re.compile(r"\[redeliv\].*(?:storm|identical redeliver|terminat)", re.I)),
     ("missing_dll", re.compile(r"(?:err:module:import_dll|library .{1,100}\.dll.{0,40}(?:not found|missing))", re.I)),
     ("access_violation", re.compile(r"(?:0x)?c0000005", re.I)),
     ("no_memory", re.compile(r"(?:0x)?c0000017", re.I)),
     ("steam_platform", re.compile(r"(?:launch refusal\s*29|invalid platform)", re.I)),
+    ("mono_suspend_abort", re.compile(r"Cannot transition thread.*STATE_BLOCKING.*DO_BLOCKING", re.I)),
 )
 
 UNITY_FATALS = (
     ("unity_crash", re.compile(r"(?:Crash!!!|Receiving unhandled NULL exception|access violation|fatal error)", re.I)),
     ("steam_init_failed", re.compile(r"SteamAPI[_ ]Init.*(?:fail|false)|Steamworks.*(?:fail|not initialized)", re.I)),
+    ("graphics_init_failed", re.compile(r"(?:Failed to initialize graphics|Failed creating D3D|GfxDevice.*fail)", re.I)),
 )
 
 
@@ -115,6 +130,7 @@ def collect_fatals(text: str, rules: tuple[tuple[str, re.Pattern[str]], ...], so
 
 def stage_name(value: int) -> str:
     if value >= 75: return "Unity reached scene/asset work"
+    if value >= 71: return "Unity audio/input startup"
     if value >= 65: return "game managed assembly loaded"
     if value >= 55: return "Unity Mono/managed startup"
     if value >= 50: return "graphics API selected"
@@ -143,6 +159,28 @@ def choose_next(markers: list[dict[str, object]], fatals: list[dict[str, object]
     if "missing_dll" in fatal_codes:
         return {"priority": "Windows dependency", "action": "Identify the first missing DLL and satisfy only that legitimate prerequisite; do not add graphics/memory switches yet.", "experiment": baseline}
 
+    # Madeira issue #173 demonstrates that the same [store-undecoded] label can
+    # be emitted for AArch64 BRK (0xd4200000), i.e. a guest INT3/breakpoint,
+    # rather than a store. RWX_PLAIN does not logically fix that failure.
+    if "guest_breakpoint_misclassified" in fatal_codes:
+        action = "Preserve the first breakpoint/store-undecoded line and surrounding mach-exception lines. Treat this as a Madeira WoW64 exception-delivery/runtime bug, not a Unity-Mono RWX tuning problem."
+        if "writecopy_image_fault" in fatal_codes:
+            action += " The same run also shows a SEC_IMAGE WRITECOPY fault; preserve that evidence because it matches upstream issue #173's generic failure family."
+        return {
+            "priority": "WoW64 breakpoint / self-modifying image runtime bug",
+            "action": action,
+            "experiment": baseline,
+            "upstream_reference": "willfaust/Madeira#173",
+        }
+
+    if "mono_suspend_abort" in fatal_codes:
+        return {
+            "priority": "remove incompatible Mono suspend override",
+            "action": "Remove mono-suspend=hybrid and rerun the clean profile. That override is known to abort Unity Mono in Madeira issue #123.",
+            "experiment": baseline,
+            "upstream_reference": "willfaust/Madeira#123",
+        }
+
     # Unity's own Mono is not auto-detected by Madeira's Wine-Mono-specific
     # ml1282 path. This is an A/B only when the evidence points at JIT-backed
     # guest writes; it is never the title default.
@@ -159,6 +197,7 @@ def choose_next(markers: list[dict[str, object]], fatals: list[dict[str, object]
                 "rollback": "Remove the line after the A/B run.",
                 "reason": "Current Madeira auto-enables this optimization for Wine Mono, but its docs say Unity's bundled Mono is not auto-matched. In a 32-bit guest window FEX executes translated code, so this switch can eliminate host-side store emulation for guest RWX pages. Evidence is required before keeping it.",
             },
+            "upstream_reference": "willfaust/Madeira#123",
         }
 
     if "d3d11" in marker_codes and "d3d9" not in marker_codes:
@@ -171,6 +210,19 @@ def choose_next(markers: list[dict[str, object]], fatals: list[dict[str, object]
                 "arguments": "-force-d3d9",
                 "rollback": "Remove -force-d3d9 after the comparison if it changes nothing.",
                 "reason": "Unity 5-era Windows players support -force-d3d9; HunieCam is expected to use D3D9 and Madeira has a dedicated i386 D3D9 path.",
+            },
+        }
+
+    if "graphics_init_failed" in fatal_codes and "d3d9" not in marker_codes:
+        return {
+            "priority": "graphics API selection",
+            "action": "Run one -force-d3d9 comparison before changing Madeira's D3D9 implementation.",
+            "experiment": {
+                "name": "force Unity D3D9 after graphics-init failure",
+                "config": "",
+                "arguments": "-force-d3d9",
+                "rollback": "Remove -force-d3d9 if it does not move startup farther.",
+                "reason": "A graphics-init failure before proven D3D9 should first verify the engine is using its expected renderer.",
             },
         }
 
@@ -224,6 +276,7 @@ def analyze(madeira_text: str, unity_text: str, preflight: dict[str, object] | N
             "madeira_log_present": bool(madeira_text.strip()),
             "unity_log_present": bool(unity_text.strip()),
             "preflight_present": preflight is not None,
+            "fex_jit_dump_mentioned": bool(re.search(r"fex-jit-dump\.bin", madeira_text, re.I)),
         },
     }
     if preflight is not None:
