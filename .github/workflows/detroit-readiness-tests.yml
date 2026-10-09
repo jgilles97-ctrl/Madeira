@@ -79,10 +79,15 @@ jobs:
             build/win32u-unix/driver_ios.c /tmp/driver_ios_vulkan.c
           grep -q 'extern UINT winios_pVulkanInit' /tmp/driver_ios_vulkan.c
           grep -q 'winios_user_driver.pVulkanInit = winios_pVulkanInit' /tmp/driver_ios_vulkan.c
-          if grep -q '__attribute__((weak))' /tmp/driver_ios_vulkan.c; then
-            echo 'error: Vulkan-enabled pVulkanInit must be a strong static-link reference' >&2
-            exit 1
-          fi
+          python - <<'PY'
+          import pathlib, re
+          text = pathlib.Path('/tmp/driver_ios_vulkan.c').read_text()
+          match = re.search(r'extern\s+UINT\s+winios_pVulkanInit\s*\([^;]+;', text, re.S)
+          if not match:
+              raise SystemExit('missing pVulkanInit declaration')
+          if 'weak' in match.group(0):
+              raise SystemExit('pVulkanInit must be a strong static-link reference')
+          PY
       - name: Compile platform-neutral Vulkan WSI helper
         run: >-
           cc -std=c11 -O2 -Wall -Wextra -Werror -fPIC
@@ -94,20 +99,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install cross compiler and Vulkan headers
+      - name: Install cross compiler and isolate Vulkan headers
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 libvulkan-dev
+          mkdir -p /tmp/vulkan-headers
+          cp -R /usr/include/vulkan /tmp/vulkan-headers/
       - name: Compile Windows x64 headless Vulkan probe
         env:
           X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
-          VULKAN_HEADERS: /usr/include
+          VULKAN_HEADERS: /tmp/vulkan-headers
           VULKAN_PROBE_OUT: /tmp/vulkan_probe.exe
         run: bash tests/x64/build-vulkan-probe.sh
       - name: Compile Windows x64 WSI Vulkan probe
         env:
           X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
-          VULKAN_HEADERS: /usr/include
+          VULKAN_HEADERS: /tmp/vulkan-headers
           VULKAN_WSI_PROBE_OUT: /tmp/vulkan_wsi_probe.exe
         run: bash tests/x64/build-vulkan-wsi-probe.sh
       - name: Verify PE artifacts
