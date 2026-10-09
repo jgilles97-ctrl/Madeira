@@ -19,6 +19,29 @@ def put(root, name, data):
     return path
 
 
+def current_context(run="run-1", build="b", profile="p", native="n"):
+    return {
+        "schema": "MADEIRA_HUNIECAM_RUN_CONTEXT_V2",
+        "ready": True,
+        "run_id_sha256": run,
+        "build_fingerprint_sha256": build,
+        "profile_sha256": profile,
+        "native_module_set_sha256": native,
+        "session_summary": {"deepest_stage": 75, "failure_codes": []},
+    }
+
+
+def current_contract(run="run-1", valid=True):
+    return {
+        "schema": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4",
+        "valid": valid,
+        "run_id_sha256": run,
+        "run_context_v2_complete": valid,
+        "errors": [],
+        "warnings": [],
+    }
+
+
 class HunieCamEvidenceManifestTests(unittest.TestCase):
     def test_manifest_hashes_files_without_embedding_raw_log(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -28,38 +51,47 @@ class HunieCamEvidenceManifestTests(unittest.TestCase):
             log = root / "madeira-log.txt"; secret = "RAW LOG TOKEN SHOULD NOT APPEAR"; log.write_text(secret)
             report = mod.build({"preflight": pre, "session": ses, "madeira_log": log})
             rendered = json.dumps(report)
-            self.assertEqual(report["schema"], "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V4")
+            self.assertEqual(report["schema"], "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V5")
             self.assertTrue(report["minimum_review_bundle_complete"])
             self.assertNotIn(secret, rendered)
             self.assertFalse(report["privacy"]["raw_logs_embedded"])
 
-    def test_sealed_launch_identity_requires_matching_context_and_contract(self):
+    def test_sealed_launch_identity_requires_current_matching_context_and_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            context = put(root, "context.json", {"schema": "MADEIRA_HUNIECAM_RUN_CONTEXT_V1", "ready": True, "run_id_sha256": "run-1", "build_fingerprint_sha256": "b", "profile_sha256": "p"})
-            contract = put(root, "contract.json", {"schema": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V2", "valid": True, "run_id_sha256": "run-1", "errors": [], "warnings": []})
+            context = put(root, "context.json", current_context())
+            contract = put(root, "contract.json", current_contract())
             self.assertTrue(mod.build({"run_context": context, "contract": contract})["sealed_launch_identity_complete"])
-            contract.write_text(json.dumps({"schema": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V2", "valid": True, "run_id_sha256": "different", "errors": [], "warnings": []}))
+            contract.write_text(json.dumps(current_contract(run="different")))
             report = mod.build({"run_context": context, "contract": contract})
             self.assertFalse(report["sealed_launch_identity_complete"])
             self.assertTrue(report["integrity_warnings"])
 
+    def test_legacy_context_cannot_claim_current_sealed_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            context = put(root, "context.json", {"schema": "MADEIRA_HUNIECAM_RUN_CONTEXT_V1", "ready": True, "run_id_sha256": "run-1", "build_fingerprint_sha256": "b", "profile_sha256": "p"})
+            contract = put(root, "contract.json", {"schema": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V2", "valid": True, "run_id_sha256": "run-1"})
+            self.assertFalse(mod.build({"run_context": context, "contract": contract})["sealed_launch_identity_complete"])
+
     def test_device_template_must_match_primary_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            context = put(root, "context.json", {"schema": "C", "ready": True, "run_id_sha256": "r", "build_fingerprint_sha256": "b", "profile_sha256": "p"})
-            device = put(root, "device.json", {"schema": "D", "run_id_sha256": "r", "build_fingerprint_sha256": "b", "profile_sha256": "p"})
+            context = put(root, "context.json", current_context(run="r"))
+            device = put(root, "device.json", {"schema": "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2", "run_id_sha256": "r", "build_fingerprint_sha256": "b", "profile_sha256": "p"})
             self.assertTrue(mod.build({"run_context": context, "device_template": device})["device_template_linked_to_primary_run"])
-            device.write_text(json.dumps({"schema": "D", "run_id_sha256": "other", "build_fingerprint_sha256": "b", "profile_sha256": "p"}))
+            device.write_text(json.dumps({"schema": "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2", "run_id_sha256": "other", "build_fingerprint_sha256": "b", "profile_sha256": "p"}))
             self.assertFalse(mod.build({"run_context": context, "device_template": device})["device_template_linked_to_primary_run"])
 
-    def test_repeatability_requires_three_unique_matching_build_profile_runs(self):
+    def test_repeatability_requires_current_v3_three_unique_matching_build_profile_native_set(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            context = put(root, "context.json", {"schema": "C", "ready": True, "run_id_sha256": "r1", "build_fingerprint_sha256": "b", "profile_sha256": "p"})
-            repeat = put(root, "repeat.json", {"schema": "R", "passed": True, "unique_run_count": 3, "run_count": 3, "build_fingerprint_sha256": "b", "profile_sha256": "p"})
+            context = put(root, "context.json", current_context(run="r1"))
+            repeat = put(root, "repeat.json", {"schema": "MADEIRA_HUNIECAM_REPEATABILITY_V3", "passed": True, "unique_run_count": 3, "run_count": 3, "build_fingerprint_sha256": "b", "profile_sha256": "p", "native_module_set_sha256": "n"})
             self.assertTrue(mod.build({"run_context": context, "repeatability": repeat})["cold_launch_repeatability_complete"])
-            repeat.write_text(json.dumps({"schema": "R", "passed": True, "unique_run_count": 2, "build_fingerprint_sha256": "b", "profile_sha256": "p"}))
+            repeat.write_text(json.dumps({"schema": "MADEIRA_HUNIECAM_REPEATABILITY_V3", "passed": True, "unique_run_count": 2, "run_count": 2, "build_fingerprint_sha256": "b", "profile_sha256": "p", "native_module_set_sha256": "n"}))
+            self.assertFalse(mod.build({"run_context": context, "repeatability": repeat})["cold_launch_repeatability_complete"])
+            repeat.write_text(json.dumps({"schema": "MADEIRA_HUNIECAM_REPEATABILITY_V2", "passed": True, "unique_run_count": 3, "run_count": 3, "build_fingerprint_sha256": "b", "profile_sha256": "p", "native_module_set_sha256": "n"}))
             self.assertFalse(mod.build({"run_context": context, "repeatability": repeat})["cold_launch_repeatability_complete"])
 
     def test_pe_dependency_audit_must_match_preflight_hash(self):
@@ -77,13 +109,17 @@ class HunieCamEvidenceManifestTests(unittest.TestCase):
             guard = put(root, "guard.json", {"schema": "G", "status": "FAIL", "experiment": "bad", "changes": []})
             self.assertTrue(mod.build({"guard": guard})["integrity_warnings"])
 
-    def test_acceptance_flag_only_comes_from_acceptance_report(self):
+    def test_acceptance_requires_current_report_linked_to_primary_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            acceptance = put(root, "acceptance.json", {"schema": "A", "accepted": False, "overall": "NOT_READY_MISSING_EVIDENCE", "counts": {}})
+            acceptance = put(root, "acceptance.json", {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V8", "accepted": True, "overall": "ACCEPTED", "counts": {}, "run_id_sha256": "run-1"})
+            # An acceptance JSON by itself cannot establish a current device pass;
+            # it must identify the same sealed primary run.
             self.assertFalse(mod.build({"acceptance": acceptance})["device_acceptance_complete"])
-            acceptance.write_text(json.dumps({"schema": "A", "accepted": True, "overall": "ACCEPTED", "counts": {}, "run_id_sha256": "run-1"}))
-            self.assertTrue(mod.build({"acceptance": acceptance})["device_acceptance_complete"])
+            context = put(root, "context.json", current_context())
+            self.assertTrue(mod.build({"run_context": context, "acceptance": acceptance})["device_acceptance_complete"])
+            acceptance.write_text(json.dumps({"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V8", "accepted": True, "overall": "ACCEPTED", "counts": {}, "run_id_sha256": "different"}))
+            self.assertFalse(mod.build({"run_context": context, "acceptance": acceptance})["device_acceptance_complete"])
 
 
 if __name__ == "__main__":
