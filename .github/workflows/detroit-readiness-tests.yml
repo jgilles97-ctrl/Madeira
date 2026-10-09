@@ -7,7 +7,9 @@ on:
       - "tests/host/check-detroit-readiness.py"
       - "tests/host/check-detroit-vulkan-contract.py"
       - "tests/x64/vulkan_probe.c"
+      - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/build-vulkan-wsi-probe.sh"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
       - "app/Madeira/IOSDisplayShim.m"
@@ -18,7 +20,9 @@ on:
       - "tests/host/check-detroit-readiness.py"
       - "tests/host/check-detroit-vulkan-contract.py"
       - "tests/x64/vulkan_probe.c"
+      - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/build-vulkan-wsi-probe.sh"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
       - "app/Madeira/IOSDisplayShim.m"
@@ -54,3 +58,31 @@ jobs:
           -Ibuild/ntdll-unix
           -c build/ntdll-unix/vulkan_surface_ios.c
           -o /tmp/vulkan_surface_ios.o
+
+  windows-guest-probes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cross compiler and Vulkan headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 libvulkan-dev
+          mkdir -p /tmp/vulkan-headers
+          cp -R /usr/include/vulkan /tmp/vulkan-headers/
+      - name: Compile Windows x64 headless Vulkan probe
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_PROBE_OUT: /tmp/vulkan_probe.exe
+        run: bash tests/x64/build-vulkan-probe.sh
+      - name: Compile Windows x64 WSI Vulkan probe
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_WSI_PROBE_OUT: /tmp/vulkan_wsi_probe.exe
+        run: bash tests/x64/build-vulkan-wsi-probe.sh
+      - name: Verify PE artifacts
+        run: |
+          file /tmp/vulkan_probe.exe /tmp/vulkan_wsi_probe.exe
+          file /tmp/vulkan_probe.exe | grep -qi 'PE32+' 
+          file /tmp/vulkan_wsi_probe.exe | grep -qi 'PE32+'
