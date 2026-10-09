@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Generate and normalize structured on-device evidence for HunieCam acceptance.
 
-The template replaces vague checkboxes with named pointer positions and counted
-cold-launch / suspend-resume trials. Unknown observations stay null.
+Cycle 6 can seed the template from a sealed run context. Device observations
+then carry the exact run/build/profile fingerprints they describe. Unknown
+observations remain null; named pointer/cold-launch/suspend trials remain the
+authoritative device evidence.
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V1"
+SCHEMA = "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2"
 POINTER_POINTS = (
     "top_left", "top_center", "top_right",
     "middle_left", "center", "middle_right",
@@ -19,9 +21,20 @@ POINTER_POINTS = (
 )
 
 
-def template() -> dict[str, Any]:
+def _link(run_context: dict[str, Any] | None) -> dict[str, Any]:
+    context = run_context or {}
+    ready = bool(context.get("ready") and context.get("run_id_sha256"))
+    return {
+        "run_id_sha256": context.get("run_id_sha256") if ready else None,
+        "build_fingerprint_sha256": context.get("build_fingerprint_sha256") if ready else None,
+        "profile_sha256": context.get("profile_sha256") if ready else None,
+    }
+
+
+def template(run_context: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "schema": SCHEMA,
+        **_link(run_context),
         "jit_memory_ready": None,
         "real_gameplay": None,
         "rendering_correct": None,
@@ -44,7 +57,7 @@ def template() -> dict[str, Any]:
         "rendering_notes": "",
         "audio_notes": "",
         "performance_notes": "",
-        "rule": "Use true/false only after observing the result on the iPad. Leave unknown items null. Do not convert missing evidence into success.",
+        "rule": "Use true/false only after observing the result on the iPad. Leave unknown items null. Preserve the seeded run/build/profile link; do not reuse this form for a different launch.",
     }
 
 
@@ -54,6 +67,9 @@ def _bool(value: Any) -> bool | None:
 
 def summarize(data: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
+    if data.get("schema") not in {"MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V1", SCHEMA}:
+        warnings.append(f"Unexpected device-evidence schema: {data.get('schema')!r}")
+
     points = data.get("pointer_grid") if isinstance(data.get("pointer_grid"), list) else []
     point_map: dict[str, bool | None] = {}
     duplicates: set[str] = set()
@@ -79,6 +95,7 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
     suspend_values = [_bool(x.get("success")) for x in suspend if isinstance(x, dict)]
 
     normalized = dict(data)
+    normalized["schema"] = SCHEMA
     normalized["pointer_points_tested"] = len(passed) + len(failed)
     normalized["pointer_points_passed"] = len(passed)
     normalized["cold_launches"] = sum(1 for x in cold_values if x is True)
@@ -87,6 +104,9 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
     complete_pointer = not missing and not unknown and not failed and len(passed) == len(POINTER_POINTS)
     cold_complete = len(cold_values) >= 3 and all(x is True for x in cold_values[:3])
     suspend_complete = len(suspend_values) >= 2 and all(x is True for x in suspend_values[:2])
+    run_link_ready = all(bool(normalized.get(k)) for k in ("run_id_sha256", "build_fingerprint_sha256", "profile_sha256"))
+    if not run_link_ready:
+        warnings.append("Device observations are not linked to a sealed Cycle 6 run ID/build/profile; final acceptance must remain unproven.")
 
     return {
         "schema": SCHEMA,
@@ -98,23 +118,29 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
             "pointer_failed": failed,
             "cold_launch_trials_complete": cold_complete,
             "suspend_resume_trials_complete": suspend_complete,
+            "run_link_ready": run_link_ready,
         },
         "warnings": warnings,
-        "rule": "Structured trial details are authoritative when present; derived counts are convenience fields for the acceptance evaluator.",
+        "rule": "Structured trial details are authoritative. The normalized object is directly consumable by Acceptance V5 and must remain linked to the launch actually observed.",
     }
+
+
+def _load(path: pathlib.Path | None) -> dict[str, Any] | None:
+    return json.loads(path.read_text(encoding="utf-8")) if path else None
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Generate/normalize HunieCam iPad device evidence")
     sub = p.add_subparsers(dest="command", required=True)
     make = sub.add_parser("template")
+    make.add_argument("--run-context", type=pathlib.Path, help="Optional sealed huniecam-run-context.json to bind this observation form")
     make.add_argument("--json", dest="json_path", type=pathlib.Path)
     norm = sub.add_parser("normalize")
     norm.add_argument("input", type=pathlib.Path)
     norm.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = p.parse_args()
     if args.command == "template":
-        report = template()
+        report = template(_load(args.run_context))
     else:
         raw = json.loads(args.input.read_text(encoding="utf-8"))
         report = summarize(raw)
