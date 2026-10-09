@@ -12,6 +12,7 @@ on:
       - "tests/host/check-detroit-winevulkan-contract.py"
       - "tests/host/check-detroit-memory-report.py"
       - "tests/host/check-detroit-device-gate.py"
+      - "tests/host/check-detroit-moltenvk-build.py"
       - "tests/ios/memory_headroom_probe.c"
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
@@ -51,6 +52,7 @@ on:
       - "tests/host/check-detroit-winevulkan-contract.py"
       - "tests/host/check-detroit-memory-report.py"
       - "tests/host/check-detroit-device-gate.py"
+      - "tests/host/check-detroit-moltenvk-build.py"
       - "tests/ios/memory_headroom_probe.c"
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
@@ -106,6 +108,7 @@ jobs:
           tests/host/check-detroit-winevulkan-contract.py
           tests/host/check-detroit-memory-report.py
           tests/host/check-detroit-device-gate.py
+          tests/host/check-detroit-moltenvk-build.py
           build/win32u-unix/patch_driver_vulkan.py
           build/ntdll-unix/patch_virtual_winevulkan.py
       - name: Validate shell syntax
@@ -130,6 +133,8 @@ jobs:
         run: python tests/host/check-detroit-vulkan-contract.py
       - name: Detroit physical-device gate contract
         run: python tests/host/check-detroit-device-gate.py
+      - name: Detroit MoltenVK iOS build contract
+        run: python tests/host/check-detroit-moltenvk-build.py
       - name: Exercise deterministic win32u driver patch
         run: |
           python build/win32u-unix/patch_driver_vulkan.py \
