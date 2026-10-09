@@ -6,8 +6,9 @@ our eventual physical-device result meaningful: the controller itself is an
 x64 Windows program, runs all three canaries through Wine/FEX in a strict order,
 has finite timeouts, stops on the first failure, only reports success after the
 120-frame presentation stage succeeds, durably publishes proof only after that
-full pass, and the iPad app exposes a deliberately narrow one-tap route to the
-fixed diagnostic without becoming an arbitrary EXE launcher.
+full pass, binds that proof to the exact Windows payload tested, and the iPad app
+exposes a deliberately narrow one-tap route without becoming an arbitrary EXE
+launcher.
 """
 
 from pathlib import Path
@@ -68,7 +69,7 @@ def main() -> None:
     # Durable proof is stricter than stdout. Every new test deletes stale proof;
     # only the x64 Windows controller can publish a new proof, and it does so via
     # temp-file + flush + atomic replacement after every child has passed.
-    require(gate, '#define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V1"', "proof schema")
+    require(gate, '#define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"', "proof schema")
     require(gate, '#define PROOF_PATH "C:\\\\madeira-detroit-vulkan-gate.txt"', "fixed proof path")
     require(gate, "clear_stale_proof();", "stale proof deletion before testing")
     require(gate, "DeleteFileA(PROOF_PATH)", "stale proof removal")
@@ -78,10 +79,20 @@ def main() -> None:
     require(gate, "MOVEFILE_WRITE_THROUGH", "durable proof rename")
     require(gate, "PROOF_RESULT=NOT_WRITTEN", "failed-gate proof suppression")
     require(gate, "FAILED_GATE=proof-publication", "proof publication failure gate")
+
+    # The proof must describe the exact x64 executables that were exercised,
+    # otherwise an old PASS could survive a renderer/canary update. Both sides
+    # implement the same streaming 64-bit FNV identity over name + separator +
+    # file bytes. It is a stale-build detector, not a cryptographic signature.
+    require(gate, "FNV64_OFFSET", "Windows payload fingerprint offset")
+    require(gate, "FNV64_PRIME", "Windows payload fingerprint prime")
+    require(gate, "payload_fingerprint(&payload_hash)", "pre-test payload fingerprint")
+    require(gate, '"PAYLOAD_FNV64=%016llx', "payload identity in Windows output/proof")
+    require(gate, "FAILED_GATE=payload-fingerprint", "fingerprint failure gate")
     require_order(
         gate,
-        ["VULKAN_DEVICE=PASS", "WIN32_SURFACE=PASS", "PRESENTED_120_FRAMES=PASS", "write_full_pass_proof()", "OVERALL=PASS"],
-        "proof publication",
+        ["payload_fingerprint(&payload_hash)", "run_stage(&stages[i])", "write_full_pass_proof(payload_hash)", "OVERALL=PASS"],
+        "payload-bound proof flow",
     )
 
     # Keep the baseline presentation proof display-paced. A 2026 MoltenVK
@@ -128,7 +139,7 @@ def main() -> None:
     # entry to the existing library/JIT/FEX/Wine route. It must not call the low-
     # level Wine process entry point directly or add an arbitrary executable URL.
     require(app, "DetroitVulkanDeviceGateLauncher", "one-tap iPad launcher")
-    require(app, 'Label("Detroit graphics test"', "plain-language iPad button")
+    require(app, '"Detroit graphics test"', "plain-language iPad button")
     require(app, 'gateExecutable = "vulkan-device-gate-x64.exe"', "fixed gate executable")
     for exe in payload_names[:3]:
         require(app, f'"{exe}"', f"fixed iPad payload member {exe}")
@@ -143,6 +154,20 @@ def main() -> None:
     if "queryItems" in app or "URLComponents" in app:
         raise AssertionError("one-tap Detroit UI must not grow a user-controlled executable URL route")
 
+    # Madeira accepts physical PASS only when the proof is complete AND bound to
+    # the four executables in this installed app. An old proof must show as not
+    # passed after a test payload update.
+    require(app, "DetroitVulkanDeviceGateProof", "iPad proof reader")
+    require(app, 'schema = "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"', "matching iPad proof schema")
+    require(app, "bundledPayloadFingerprint()", "iPad current-payload fingerprint")
+    require(app, 'values["EXECUTION"] == "physical-device-local"', "physical execution marker")
+    require(app, 'values["VULKAN_DEVICE"] == "PASS"', "device PASS proof")
+    require(app, 'values["WIN32_SURFACE"] == "PASS"', "surface PASS proof")
+    require(app, 'values["PRESENTED_120_FRAMES"] == "PASS"', "120-frame PASS proof")
+    require(app, 'values["OVERALL"] == "PASS"', "overall PASS proof")
+    require(app, 'values["PAYLOAD_FNV64"]?.lowercased()', "proof/current-payload identity comparison")
+    require(app, "Detroit graphics test — Passed", "visible current-payload PASS status")
+
     # Existing public madeira://play links remain library-restricted; this test
     # must not weaken the general shortcut parser to make the diagnostic work.
     require(shortcuts, 'url.host?.lowercased() == "play"', "existing play-only shortcut parser")
@@ -150,6 +175,7 @@ def main() -> None:
 
     print("PASS: Detroit device gate contract")
     print("PASS: durable proof is cleared first and published only after full physical pass")
+    print("PASS: physical proof is tied to the exact current x64 test payload")
     print("PASS: one-tap iPad gate remains fixed, x64-verified, contained, and library-routed")
 
 
