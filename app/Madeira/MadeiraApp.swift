@@ -307,7 +307,7 @@ enum DetroitVulkanDeviceGateProof {
         var explanation: String {
             switch self {
             case .passed:
-                return "Passed on this iPad with this exact local graphics runtime."
+                return "Passed on this iPad with this exact local graphics runtime, including Detroit's Vulkan 1.1, compute, and descriptor-indexing baseline."
             case .notRun:
                 return "Not yet proven on this iPad. Run the graphics test before launching Detroit."
             case .foregroundLost:
@@ -321,7 +321,7 @@ enum DetroitVulkanDeviceGateProof {
             case .notPhysicalDevice:
                 return "The saved test record does not confirm a fully local physical-iPad run. Run the graphics test on this iPad."
             case .incompletePass:
-                return "The PASS proof is missing one or more required graphics checks. Run the test again."
+                return "The PASS proof is missing one or more required Detroit graphics checks. Run the current test again."
             case .currentPayloadUnreadable:
                 return "Madeira cannot verify the test/runtime files bundled in this app. Rebuild the Detroit Vulkan runtime."
             case .payloadChanged:
@@ -329,7 +329,7 @@ enum DetroitVulkanDeviceGateProof {
             case .payloadFingerprintFailed:
                 return "Madeira could not verify all four Windows test files. Rebuild the Detroit Vulkan runtime before testing again."
             case .vulkanDeviceFailed:
-                return "The basic Vulkan device test failed. Fix the Wine/MoltenVK device path before testing Detroit."
+                return "The Detroit capability/Vulkan device test failed. Fix Vulkan 1.1, compute, descriptor indexing, or the Wine/MoltenVK device path before testing Detroit."
             case .win32SurfaceFailed:
                 return "Vulkan started, but the Windows-window to iPad Metal-surface test failed. Fix the surface bridge before testing Detroit."
             case .presentationFailed:
@@ -396,6 +396,7 @@ enum DetroitVulkanDeviceGateProof {
             guard values["ARCH"] == "x86_64-windows" else { return .wrongArchitecture }
             guard values["EXECUTION"] == "physical-device-local" else { return .notPhysicalDevice }
             guard values["FOREGROUND_INTEGRITY"] == "PASS",
+                  values["DETROIT_CAPABILITIES"] == "PASS",
                   values["VULKAN_DEVICE"] == "PASS",
                   values["WIN32_SURFACE"] == "PASS",
                   values["PRESENTED_120_FRAMES"] == "PASS",
@@ -440,8 +441,8 @@ private struct DetroitVulkanDeviceGateButton: View {
             }
             .padding(16)
             .accessibilityHint(status.passed
-                ? "Tap to repeat the local graphics qualification."
-                : "Tap to run the local Vulkan, Windows surface, and 120-frame checks. Keep Madeira in the foreground until it finishes.")
+                ? "Tap to repeat the local Detroit graphics qualification."
+                : "Tap to verify Detroit's Vulkan capabilities, Windows surface, and 120-frame presentation path. Keep Madeira in the foreground until it finishes.")
         }
     }
 }
