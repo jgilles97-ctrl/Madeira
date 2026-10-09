@@ -103,12 +103,14 @@ Cycle 7 pins these current formats so producer/consumer drift becomes a CI failu
 64. Kept the nine-point pointer grid in addition to, not instead of, drag/release testing.
 65. Kept real gameplay, rendering, audio, save restoration, measured performance, >=30 stable minutes, 3 observed cold starts, 3 sealed cold starts, 2 suspend/resume cycles and repeatable final profile as hard acceptance gates.
 66. Repaired all stale Acceptance/Bundle/Device/Manifest/Schema/Pipeline regression fixtures without weakening the new gate.
-67. Ran the final broad and targeted matrices across Python 3.11, 3.12 and 3.13; all jobs passed.
+67. Ran the broad and targeted matrices across Python 3.11, 3.12 and 3.13 and repaired every discovered regression.
 68. Reasserted the completion rule: green CI and synthetic happy paths do **not** mean HunieCam is playable on iPad; physical-device evidence is still required.
 
 ## Why the drag/release gate matters
 
-A nine-point pointer test can prove that taps/cursor positions reach the right parts of the screen, but it cannot prove HunieCam's core drag-heavy interaction works. Public Windows-touchscreen notes specifically report a failure mode where the drag moves but the release does not register. Cycle 7 therefore tests four separate facts for each real gameplay drag:
+A nine-point pointer test can prove that taps/cursor positions reach the right parts of the screen, but it cannot prove HunieCam's core drag-heavy interaction works. Public Windows-touchscreen notes specifically report a failure mode where the drag moves but the release does not register.
+
+Cycle 7 therefore tests four separate facts for each real gameplay drag:
 
 1. press registered;
 2. movement registered;
@@ -117,14 +119,28 @@ A nine-point pointer test can prove that taps/cursor positions reach the right p
 
 Three successful real gameplay trials are required. A failure or unknown result blocks acceptance. The public Windows report is only a reason to test this; the iPad/Madeira result must come from the actual device.
 
+### Post-68-pass touch-first hardening
+
+After the 68-pass audit was written, the input gate was deliberately tightened one more time without changing the count above:
+
+- all three successful drag trials must use **one consistent input mode**;
+- that mode must be a finger-based Madeira mode: `direct_finger` or `touch_pointer`;
+- hardware mouse/trackpad drag success is diagnostic only and cannot satisfy the touch-first iPad finish line;
+- mixing `direct_finger` and `touch_pointer` across the three counted trials is not accepted as one repeatable final input profile;
+- regression tests explicitly prove mouse-only success fails, mixed touch modes fail, and a consistent `touch_pointer` profile can pass when all other evidence passes.
+
+This distinguishes “the Windows game can drag with a mouse” from the actual project goal: “HunieCam is usable on the iPad with touch-first input.”
+
 ## Final CI for this cycle
 
-Final verified head before this document: `0f21c8483fa3b270bd98ab97812fef5c5cd92bbf`.
+Latest code-test head for the touch-first hardening:
 
-- `HunieCam iPad compatibility checks` run **37900821124**: Python 3.11, 3.12 and 3.13 all passed compilation, focused diagnostics, the complete HunieCam regression suite and generic Madeira log-triage regressions.
-- `HunieCam evidence guardrails` run **37900821167**: Python 3.11, 3.12 and 3.13 all passed schema synchronization, provenance/dependency, device/final-acceptance and pipeline/runtime-triage guardrails.
+`bcc041152223f6438ecdde7b1fd472e700a46223`
 
-CI caught real integration drift during the cycle (old Contract/Pipeline/Device/Manifest/Acceptance expectations) and the fixes updated the tests/consumers to the stricter formats. The hard gates were not relaxed to obtain green results.
+- `HunieCam iPad compatibility checks` run **37901397569**: Python 3.11, 3.12 and 3.13 all passed compilation, focused diagnostics, the complete HunieCam regression suite and generic Madeira log-triage regressions.
+- `HunieCam evidence guardrails` run **37901397765**: Python 3.11, 3.12 and 3.13 all passed schema synchronization, provenance/dependency, device/final-acceptance and pipeline/runtime-triage guardrails.
+
+CI caught real integration drift during the cycle (old Contract/Pipeline/Device/Manifest/Acceptance expectations). The consumers/tests were brought forward to the stricter formats; the hard gates were not relaxed to obtain green results.
 
 ## Exact clean first physical-iPad run
 
@@ -143,7 +159,7 @@ CI caught real integration drift during the cycle (old Contract/Pipeline/Device/
 13. Run Pipeline V8 and keep its sealed run-linked device form for that exact launch.
 14. Do not reuse the form for another run ID.
 
-If the runtime reaches real gameplay, the physical test must include the nine pointer locations **and three real gameplay drag/release trials** before input can pass.
+If the runtime reaches real gameplay, the physical test must include the nine pointer locations and three real gameplay drag/release trials in one consistent finger-based Madeira mode before input can pass.
 
 ## Conditional next-step ladder
 
@@ -156,11 +172,11 @@ If the runtime reaches real gameplay, the physical test must include the nine po
 - Proven D3D9 + remaining graphics-specific failure → one `d3d9 = native` A/B.
 - Steam/Dock-only failure → keep it separate from direct game compatibility.
 - Scene/game code works but performance evidence is dirty → repeat the unchanged profile for clean measurement.
-- Pointer works but drag release fails → input usability blocker; do not accept the port.
-- Full current evidence passes → run the final acceptance bundle; only an actual `accepted=true` backed by device evidence closes the project.
+- Pointer works but finger drag/release fails → input usability blocker; a successful hardware-mouse comparison only diagnoses the touch path and does not accept the port.
+- Full current evidence passes → run the final acceptance bundle; only an actual `accepted=true` backed by real device evidence closes the project.
 
 ## Current project status
 
-**Proven:** the research/diagnostic/evidence machinery is internally consistent and CI-green across all three Python versions.
+**Proven:** the research/diagnostic/evidence machinery, including touch-first drag acceptance logic, is internally consistent and CI-green across all three Python versions.
 
 **Not proven:** HunieCam Studio running as a fully usable local Madeira game on the physical iPad Pro M4. No documentation or CI result may replace that device proof.
