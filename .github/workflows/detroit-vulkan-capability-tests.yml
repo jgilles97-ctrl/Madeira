@@ -4,16 +4,22 @@ on:
   push:
     paths:
       - "tests/x64/vulkan_probe.c"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/patch-detroit-descriptor-features.py"
       - "tests/x64/vulkan_device_gate.c"
       - "app/Madeira/MadeiraApp.swift"
+      - "docs/detroit-m4-8gb.cfg"
       - "tests/host/check-detroit-vulkan-capabilities.py"
       - "tests/host/check-detroit-capability-proof.py"
       - ".github/workflows/detroit-vulkan-capability-tests.yml"
   pull_request:
     paths:
       - "tests/x64/vulkan_probe.c"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/patch-detroit-descriptor-features.py"
       - "tests/x64/vulkan_device_gate.c"
       - "app/Madeira/MadeiraApp.swift"
+      - "docs/detroit-m4-8gb.cfg"
       - "tests/host/check-detroit-vulkan-capabilities.py"
       - "tests/host/check-detroit-capability-proof.py"
       - ".github/workflows/detroit-vulkan-capability-tests.yml"
@@ -29,9 +35,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - name: Compile capability contracts
+      - name: Compile capability contracts and descriptor patcher
         run: >-
           python -m py_compile
+          tests/x64/patch-detroit-descriptor-features.py
           tests/host/check-detroit-vulkan-capabilities.py
           tests/host/check-detroit-capability-proof.py
       - name: Verify Detroit Vulkan capability gate
