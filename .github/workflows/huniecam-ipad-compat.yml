@@ -40,6 +40,30 @@ jobs:
           tools/madeira_log_triage.py
           tests/test_huniecam_*.py
           tests/test_madeira_log_triage.py
+
+      # Keep the high-risk evidence chain visible as separate steps. These are
+      # allowed to fail here so GitHub's job summary tells us exactly which
+      # subsystem regressed; the final full-suite step remains authoritative and
+      # will fail the job if anything is broken.
+      - name: Diagnose acceptance gates
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_acceptance -v
+      - name: Diagnose final acceptance bundle
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_acceptance_bundle -v
+      - name: Diagnose evidence contract
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_evidence_contract -v
+      - name: Diagnose repeatability
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_repeatability -v
+      - name: Diagnose save verification
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_save_probe -v
+      - name: Diagnose pipeline integration
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_pipeline -v
+
       - name: Run full HunieCam regression suite
         run: python -m unittest discover -s tests -p 'test_huniecam_*.py' -v
       - name: Run generic Madeira log triage regressions
