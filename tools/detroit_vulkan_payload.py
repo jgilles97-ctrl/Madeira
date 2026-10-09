@@ -6,9 +6,19 @@ from __future__ import annotations
 import argparse
 import pathlib
 import struct
-import sys
 
 ARM64EC = 0xA641
+AMD64 = 0x8664
+EXPECTED_MOLTENVK_REPO = "https://github.com/DiAvisoo/MoltenVK-Detroit.git"
+EXPECTED_MOLTENVK_RELEASE = "Release003"
+EXPECTED_MOLTENVK_COMMIT = "8b511fdc5351a37c305bc246e161796ddca56b18"
+ARM64EC_MODULES = ("vulkan-1.dll", "winevulkan.dll")
+X64_DEVICE_CANARIES = (
+    "vulkan_probe.exe",
+    "vulkan_wsi_probe.exe",
+    "vulkan_swapchain_probe.exe",
+    "vulkan-device-gate-x64.exe",
+)
 
 
 def pe_machine(path: pathlib.Path) -> int:
@@ -21,6 +31,40 @@ def pe_machine(path: pathlib.Path) -> int:
     return struct.unpack_from("<H", data, peoff + 4)[0]
 
 
+def parse_build_info(path: pathlib.Path) -> dict[str, str]:
+    info: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if key:
+            info[key] = value.strip()
+    return info
+
+
+def verify_pe(
+    path: pathlib.Path,
+    expected_machine: int,
+    expected_label: str,
+    failures: list[str],
+) -> None:
+    if not path.is_file():
+        failures.append(f"{path.name}: missing from Windows payload farm")
+        return
+    try:
+        machine = pe_machine(path)
+    except (OSError, ValueError) as exc:
+        failures.append(f"{path.name}: invalid PE: {exc}")
+        return
+    if machine != expected_machine:
+        failures.append(
+            f"{path.name}: PE machine 0x{machine:04x}, expected {expected_label} 0x{expected_machine:04x}"
+        )
+        return
+    print(f"PASS {path.name}: {expected_label} PE ({path.stat().st_size} bytes)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--farm", type=pathlib.Path, required=True)
@@ -31,24 +75,19 @@ def main() -> int:
     failures: list[str] = []
     warnings: list[str] = []
 
-    for name in ("vulkan-1.dll", "winevulkan.dll"):
-        path = args.farm / name
-        if not path.is_file():
-            failures.append(f"{name}: missing from ARM64EC DLL farm")
-            continue
-        try:
-            machine = pe_machine(path)
-        except (OSError, ValueError) as exc:
-            failures.append(f"{name}: invalid PE: {exc}")
-            continue
-        if machine != ARM64EC:
-            failures.append(f"{name}: PE machine 0x{machine:04x}, expected ARM64EC 0x{ARM64EC:04x}")
-        else:
-            print(f"PASS {name}: ARM64EC PE ({path.stat().st_size} bytes)")
+    # Wine-facing Vulkan modules run natively as ARM64EC inside Madeira.
+    for name in ARM64EC_MODULES:
+        verify_pe(args.farm / name, ARM64EC, "ARM64EC", failures)
+
+    # The controller and canaries intentionally stay x86-64. If one of these
+    # accidentally becomes ARM64/ARM64EC, the physical gate would stop proving
+    # that the FEX + Wine x64 path used by Detroit is actually alive.
+    for name in X64_DEVICE_CANARIES:
+        verify_pe(args.farm / name, AMD64, "x86-64", failures)
 
     lib = args.moltenvk / "lib" / "libMoltenVK.a"
     header = args.moltenvk / "include" / "vulkan" / "vulkan.h"
-    info = args.moltenvk / "BUILD-INFO.txt"
+    info_path = args.moltenvk / "BUILD-INFO.txt"
     if not lib.is_file() or lib.stat().st_size == 0:
         failures.append("MoltenVK: missing/empty lib/libMoltenVK.a")
     else:
@@ -57,14 +96,36 @@ def main() -> int:
         failures.append("MoltenVK: missing Vulkan headers")
     else:
         print("PASS MoltenVK headers")
-    if info.is_file():
-        text = info.read_text(encoding="utf-8", errors="replace")
-        ref = next((line.split("=", 1)[1] for line in text.splitlines() if line.startswith("ref=")), "unknown")
-        print(f"INFO MoltenVK ref={ref}")
-        if ref != "Release003":
-            warnings.append(f"MoltenVK ref is {ref}, not the currently pinned Detroit baseline Release003")
+
+    if info_path.is_file():
+        info = parse_build_info(info_path)
+        source = info.get("source")
+        release = info.get("release")
+        ref = info.get("ref")
+        commit = info.get("commit")
+        print(
+            "INFO MoltenVK "
+            f"source={source or 'unknown'} release={release or 'unknown'} "
+            f"ref={ref or 'unknown'} commit={commit or 'unknown'}"
+        )
+        if source != EXPECTED_MOLTENVK_REPO:
+            failures.append(
+                f"MoltenVK source identity is {source!r}, expected {EXPECTED_MOLTENVK_REPO!r}"
+            )
+        if release != EXPECTED_MOLTENVK_RELEASE:
+            failures.append(
+                f"MoltenVK release label is {release!r}, expected {EXPECTED_MOLTENVK_RELEASE!r}"
+            )
+        if commit != EXPECTED_MOLTENVK_COMMIT:
+            failures.append(
+                f"MoltenVK commit is {commit!r}, expected audited Release003 commit {EXPECTED_MOLTENVK_COMMIT}"
+            )
+        if ref != EXPECTED_MOLTENVK_COMMIT:
+            warnings.append(
+                f"MoltenVK checkout ref is {ref!r}; normal Detroit builds pin the audited commit directly"
+            )
     else:
-        warnings.append("MoltenVK BUILD-INFO.txt missing; source identity is not recorded")
+        failures.append("MoltenVK BUILD-INFO.txt missing; exact source identity cannot be proved")
 
     for item in warnings:
         print(f"WARN {item}")
@@ -74,7 +135,7 @@ def main() -> int:
     if failures:
         print("RESULT=BLOCKED")
         return 1 if args.strict else 0
-    print("RESULT=READY_FOR_DEVICE_VULKAN_PROBES")
+    print("RESULT=READY_FOR_DEVICE_VULKAN_GATE")
     return 0
 
 
