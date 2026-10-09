@@ -17,11 +17,17 @@ SPEC.loader.exec_module(mod)
 
 
 def fake_pe(path):
+    # Minimal valid PE32 with no import directory. This is enough for both the
+    # title preflight and Cycle 6's read-only import-table parser.
     data = bytearray(512)
     data[:2] = b"MZ"
     struct.pack_into("<I", data, 0x3C, 0x80)
-    data[0x80:0x84] = b"PE\0\0"
-    struct.pack_into("<H", data, 0x84, 0x014C)
+    pe = 0x80
+    data[pe:pe + 4] = b"PE\0\0"
+    struct.pack_into("<H", data, pe + 4, 0x014C)
+    struct.pack_into("<H", data, pe + 6, 0)
+    struct.pack_into("<H", data, pe + 20, 0xE0)
+    struct.pack_into("<H", data, pe + 24, 0x10B)
     path.write_bytes(data)
 
 
@@ -67,10 +73,14 @@ class HunieCamPipelineTests(unittest.TestCase):
             ]))
             out = base / "evidence"
             summary = mod.run(install, madeira, unity, out)
-            self.assertEqual(summary["schema"], "MADEIRA_HUNIECAM_PIPELINE_V3")
+            self.assertEqual(summary["schema"], "MADEIRA_HUNIECAM_PIPELINE_V4")
             self.assertEqual(summary["guard_status"], "PASS")
             self.assertTrue(summary["evidence_contract_valid"])
             self.assertTrue(summary["run_record_ready"])
+            self.assertTrue(summary["run_context_ready"])
+            self.assertTrue(summary["run_id_sha256"])
+            self.assertTrue(summary["pe_import_audit_valid"])
+            self.assertEqual(summary["pe_import_count"], 0)
             self.assertTrue(summary["fps_cap_effective"])
             self.assertTrue(summary["performance_comparison_clean"])
             self.assertTrue(summary["owned_build_fingerprint"])
@@ -80,13 +90,32 @@ class HunieCamPipelineTests(unittest.TestCase):
             for name in (
                 "huniecam-preflight.json", "huniecam-session.json", "huniecam-issues.json",
                 "huniecam-performance.json", "huniecam-failure-capsule.json",
-                "huniecam-run-record.json", "huniecam-evidence-contract.json",
-                "huniecam-next-run.json", "huniecam-evidence-manifest.json",
-                "huniecam-pipeline-summary.json",
+                "huniecam-run-record.json", "huniecam-run-context.json", "huniecam-pe-imports.json",
+                "huniecam-evidence-contract.json", "huniecam-next-run.json",
+                "huniecam-evidence-manifest.json", "huniecam-pipeline-summary.json",
             ):
                 self.assertTrue((out / name).is_file(), name)
             manifest = json.loads((out / "huniecam-evidence-manifest.json").read_text())
             self.assertTrue(manifest["minimum_review_bundle_complete"])
+
+    def test_same_inputs_produce_same_run_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            install = base / "game"; install.mkdir(); make_install(install)
+            madeira = base / "madeira-log.txt"; madeira.write_text("[WineProc] Target exe: HunieCamStudio.exe\n")
+            one = mod.run(install, madeira, None, base / "one")
+            two = mod.run(install, madeira, None, base / "two")
+            self.assertEqual(one["run_id_sha256"], two["run_id_sha256"])
+
+    def test_log_change_changes_run_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            install = base / "game"; install.mkdir(); make_install(install)
+            madeira = base / "madeira-log.txt"; madeira.write_text("[WineProc] Target exe: HunieCamStudio.exe\nA\n")
+            one = mod.run(install, madeira, None, base / "one")
+            madeira.write_text("[WineProc] Target exe: HunieCamStudio.exe\nB\n")
+            two = mod.run(install, madeira, None, base / "two")
+            self.assertNotEqual(one["run_id_sha256"], two["run_id_sha256"])
 
     def test_pipeline_surfaces_guard_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
