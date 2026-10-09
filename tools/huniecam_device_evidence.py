@@ -2,10 +2,9 @@
 """Generate and normalize structured on-device evidence for HunieCam acceptance.
 
 Cycle 7 Device Evidence V3 adds a title-specific drag/release test. HunieCam is
-reported to accept touch dragging on Windows but fail to register the release,
-which can make its portrait-heavy gameplay unusable. A pointer grid therefore
-is not enough: real gameplay drags must prove press, movement, release and the
-resulting game response. Unknown observations remain null.
+reported to accept touch dragging on Windows but fail to register the release.
+Final touch-first evidence therefore requires real finger-based Madeira input,
+not a hardware mouse standing in for touch. Unknown observations remain null.
 """
 from __future__ import annotations
 
@@ -21,6 +20,8 @@ POINTER_POINTS = (
     "bottom_left", "bottom_center", "bottom_right",
 )
 DRAG_RELEASE_TRIALS = 3
+TOUCH_INPUT_MODES = {"direct_finger", "touch_pointer"}
+DIAGNOSTIC_INPUT_MODES = TOUCH_INPUT_MODES | {"hardware_mouse", "hardware_trackpad"}
 
 
 def _link(run_context: dict[str, Any] | None) -> dict[str, Any]:
@@ -72,7 +73,7 @@ def template(run_context: dict[str, Any] | None = None) -> dict[str, Any]:
         "rendering_notes": "",
         "audio_notes": "",
         "performance_notes": "",
-        "rule": "Use true/false only after observing the result on the iPad. For each drag trial, prove press, movement, release and the resulting in-game response separately. Leave unknown items null and never reuse this run-linked form for another launch.",
+        "rule": "Use true/false only after observing the result on the iPad. Final touch acceptance requires three successful drag/release trials using the same finger-based Madeira input mode: direct_finger or touch_pointer. Hardware mouse/trackpad may diagnose a touch-only failure but cannot satisfy the touch-first gate.",
     }
 
 
@@ -92,6 +93,11 @@ def _drag_trial_state(item: dict[str, Any]) -> bool | None:
     if any(v is None for v in values):
         return None
     return True
+
+
+def _drag_mode(item: dict[str, Any]) -> str | None:
+    value = item.get("input_mode")
+    return value if isinstance(value, str) and value in DIAGNOSTIC_INPUT_MODES else None
 
 
 def summarize(data: dict[str, Any]) -> dict[str, Any]:
@@ -118,11 +124,18 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
     if missing:
         warnings.append("Missing pointer-grid point(s): " + ", ".join(missing))
 
-    drag_rows = data.get("drag_release_trials") if isinstance(data.get("drag_release_trials"), list) else []
-    drag_states = [_drag_trial_state(x) for x in drag_rows if isinstance(x, dict)]
+    drag_rows = [x for x in (data.get("drag_release_trials") if isinstance(data.get("drag_release_trials"), list) else []) if isinstance(x, dict)]
+    drag_states = [_drag_trial_state(x) for x in drag_rows]
+    drag_modes = [_drag_mode(x) for x in drag_rows]
     drag_tested = sum(1 for x in drag_states if x is not None)
     drag_passed = sum(1 for x in drag_states if x is True)
-    drag_complete = len(drag_states) >= DRAG_RELEASE_TRIALS and all(x is True for x in drag_states[:DRAG_RELEASE_TRIALS])
+    required_states = drag_states[:DRAG_RELEASE_TRIALS]
+    required_modes = drag_modes[:DRAG_RELEASE_TRIALS]
+    one_touch_mode = len(required_modes) >= DRAG_RELEASE_TRIALS and None not in required_modes and len(set(required_modes)) == 1 and required_modes[0] in TOUCH_INPUT_MODES
+    drag_complete = len(required_states) >= DRAG_RELEASE_TRIALS and all(x is True for x in required_states) and one_touch_mode
+    modes_seen = sorted({x for x in drag_modes if x})
+    if len(required_states) >= DRAG_RELEASE_TRIALS and all(x is True for x in required_states) and not one_touch_mode:
+        warnings.append("Drag/release mechanics passed, but the first three trials do not prove one consistent finger-based Madeira mode. Hardware mouse/trackpad or mixed modes cannot satisfy touch-first acceptance.")
     if data.get("schema") != SCHEMA:
         warnings.append("Legacy device evidence does not prove the Cycle 7 HunieCam drag-release gate.")
 
@@ -137,6 +150,8 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
     normalized["pointer_points_passed"] = len(passed)
     normalized["drag_release_trials_tested"] = drag_tested
     normalized["drag_release_trials_passed"] = drag_passed
+    normalized["drag_release_input_modes_seen"] = modes_seen
+    normalized["drag_release_touch_mode"] = required_modes[0] if drag_complete else None
     normalized["cold_launches"] = sum(1 for x in cold_values if x is True)
     normalized["suspend_resume_cycles"] = sum(1 for x in suspend_values if x is True)
 
@@ -158,12 +173,14 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
             "drag_release_trials_complete": drag_complete,
             "drag_release_trials_tested": drag_tested,
             "drag_release_trials_passed": drag_passed,
+            "drag_release_input_modes_seen": modes_seen,
+            "drag_release_touch_mode": required_modes[0] if drag_complete else None,
             "cold_launch_trials_complete": cold_complete,
             "suspend_resume_trials_complete": suspend_complete,
             "run_link_ready": run_link_ready,
         },
         "warnings": warnings,
-        "rule": "Structured trial details are authoritative. Final acceptance requires three real HunieCam gameplay drag/release trials in which press, movement, release and the resulting game response all succeed.",
+        "rule": "Structured trial details are authoritative. Final acceptance requires three real HunieCam gameplay drags in one consistent finger-based Madeira mode; each must prove press, movement, release and the resulting game response.",
     }
 
 
