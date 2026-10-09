@@ -2,13 +2,10 @@
 """Static contract for Detroit's real-device Vulkan gate.
 
 This does not pretend to execute an iPad. It protects the properties that make
-our eventual physical-device result meaningful: the controller itself is an
-x64 Windows program, runs all three canaries through Wine/FEX in a strict order,
-has finite timeouts, stops on the first failure, only reports success after the
-120-frame presentation stage succeeds, durably publishes proof only after that
-full pass, binds that proof to the exact Windows payload tested, rejects a run
-that leaves the iOS foreground, and exposes a deliberately narrow one-tap route
-without becoming an arbitrary EXE launcher.
+our eventual physical-device result meaningful: strict ordered Windows canaries,
+finite recovery, durable proof only after 120 presented frames, foreground-only
+qualification, binding to both the exact x64 canaries and the exact local
+MoltenVK/Wine/FEX/iOS bridge runtime, and a deliberately narrow one-tap route.
 """
 
 from pathlib import Path
@@ -82,10 +79,33 @@ def main() -> None:
     require(gate, '"PAYLOAD_FNV64=%016llx', "payload identity in Windows output/proof")
     require(gate, "FAILED_GATE=payload-fingerprint", "fingerprint failure gate")
 
-    # Foreground integrity is part of the proof, not merely UI advice. The x64
-    # controller clears a fixed marker before its run and checks it after the
-    # 120-frame stage. The iOS app writes the marker only while THIS diagnostic
-    # Wine process is active and the scene stops being active.
+    # The gate executable itself must carry a deterministic ID derived from the
+    # runtime inputs built immediately before it. Since both Windows and Swift
+    # fingerprint that executable, this extends stale-proof rejection from the
+    # four canaries to the renderer/runtime that actually executed them.
+    require(builder, "DETROIT_RUNTIME_BUILD_ID", "runtime identity builder input")
+    require(builder, "MADEIRA_DETROIT_RUNTIME_BUILD_ID=", "embedded runtime identity marker")
+    require(builder, "standalone-unbound", "explicit non-qualification identity for standalone CI builds")
+    require(builder, 'grep -aqF "MADEIRA_DETROIT_RUNTIME_BUILD_ID=$RUNTIME_BUILD_ID"', "linker retention check")
+    require(builder, "64 lowercase hexadecimal characters", "strict runtime identity format")
+
+    for needle, label in (
+        ("RUNTIME_INPUTS=(", "ordered runtime identity inputs"),
+        ("toolchains/moltenvk-detroit-ios/lib/libMoltenVK.a", "MoltenVK archive in runtime identity"),
+        ("app/Madeira/libwin32u_unix.a", "Wine win32u host archive in runtime identity"),
+        ("app/Madeira/libntdll_unix.a", "Wine ntdll/winevulkan host archive in runtime identity"),
+        ("vulkan-1.dll", "guest Vulkan loader in runtime build"),
+        ("winevulkan.dll", "guest Wine Vulkan ICD in runtime build"),
+        ("app/Madeira/IOSDisplayShim.m", "iOS Metal display bridge in runtime identity"),
+        ("app/Madeira/FEXBridge.mm", "FEX bridge in runtime identity"),
+        ("app/Madeira/MadeiraApp.swift", "launcher/proof implementation in runtime identity"),
+        ("hashlib.sha256()", "runtime SHA-256 derivation"),
+        ('DETROIT_RUNTIME_BUILD_ID="$DETROIT_RUNTIME_BUILD_ID"', "runtime identity passed to gate builder"),
+        ('grep -aqF "MADEIRA_DETROIT_RUNTIME_BUILD_ID=$DETROIT_RUNTIME_BUILD_ID"', "packaged gate runtime binding check"),
+    ):
+        require(orchestrator, needle, label)
+
+    # Foreground integrity is part of the proof, not merely UI advice.
     require(gate, '#define FOREGROUND_INVALID_PATH "C:\\\\madeira-detroit-vulkan-gate-invalid.txt"', "foreground marker path")
     require(gate, "DeleteFileA(FOREGROUND_INVALID_PATH)", "foreground marker reset at gate start")
     require(gate, "GetFileAttributesA(FOREGROUND_INVALID_PATH)", "foreground marker check")
@@ -121,7 +141,9 @@ def main() -> None:
     )
     for exe in payload_names:
         require(orchestrator, exe, f"packaged {exe}")
-    require(orchestrator, 'MADEIRA_EXE=vulkan-device-gate-x64.exe', "device launch instruction")
+    require(orchestrator, "Detroit graphics test", "canonical physical-iPad launch instruction")
+    if "MADEIRA_EXE=vulkan-device-gate-x64.exe" in orchestrator:
+        raise AssertionError("orchestrator must not present the generic EXE path as the canonical physical qualification route")
 
     require(app, "DetroitVulkanDeviceGateLauncher", "one-tap iPad launcher")
     require(app, '"Detroit graphics test"', "plain-language iPad button")
@@ -163,7 +185,7 @@ def main() -> None:
 
     print("PASS: Detroit device gate contract")
     print("PASS: durable proof is cleared first and published only after full physical pass")
-    print("PASS: physical proof is tied to the exact current x64 test payload")
+    print("PASS: physical proof is tied to the current x64 canaries and local graphics/runtime build")
     print("PASS: physical proof is rejected if Madeira leaves the foreground during the gate")
     print("PASS: one-tap iPad gate remains fixed, x64-verified, contained, and library-routed")
 
