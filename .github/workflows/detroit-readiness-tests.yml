@@ -15,9 +15,11 @@ on:
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/vulkan_swapchain_probe.c"
+      - "tests/x64/vulkan_device_gate.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
       - "tests/x64/build-vulkan-swapchain-probe.sh"
+      - "tests/x64/build-vulkan-device-gate.sh"
       - "build/detroit-vulkan/build.sh"
       - "build/moltenvk-ios/build.sh"
       - "build/ntdll-unix/build.sh"
@@ -51,9 +53,11 @@ on:
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/vulkan_swapchain_probe.c"
+      - "tests/x64/vulkan_device_gate.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
       - "tests/x64/build-vulkan-swapchain-probe.sh"
+      - "tests/x64/build-vulkan-device-gate.sh"
       - "build/detroit-vulkan/build.sh"
       - "build/moltenvk-ios/build.sh"
       - "build/ntdll-unix/build.sh"
@@ -110,6 +114,7 @@ jobs:
           bash -n tests/x64/build-vulkan-probe.sh
           bash -n tests/x64/build-vulkan-wsi-probe.sh
           bash -n tests/x64/build-vulkan-swapchain-probe.sh
+          bash -n tests/x64/build-vulkan-device-gate.sh
       - name: Detroit readiness fixtures
         run: python tests/host/check-detroit-readiness.py
       - name: Detroit Vulkan payload fixtures
@@ -178,12 +183,18 @@ jobs:
           VULKAN_HEADERS: /tmp/vulkan-headers
           VULKAN_SWAPCHAIN_PROBE_OUT: /tmp/vulkan_swapchain_probe.exe
         run: bash tests/x64/build-vulkan-swapchain-probe.sh
+      - name: Compile one-command Windows x64 device gate
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_DEVICE_GATE_OUT: /tmp/vulkan-device-gate-x64.exe
+        run: bash tests/x64/build-vulkan-device-gate.sh
       - name: Verify PE artifacts
         run: |
-          file /tmp/vulkan_probe.exe /tmp/vulkan_wsi_probe.exe /tmp/vulkan_swapchain_probe.exe
+          file /tmp/vulkan_probe.exe /tmp/vulkan_wsi_probe.exe /tmp/vulkan_swapchain_probe.exe /tmp/vulkan-device-gate-x64.exe
           file /tmp/vulkan_probe.exe | grep -qi 'PE32+'
           file /tmp/vulkan_wsi_probe.exe | grep -qi 'PE32+'
           file /tmp/vulkan_swapchain_probe.exe | grep -qi 'PE32+'
+          file /tmp/vulkan-device-gate-x64.exe | grep -qi 'PE32+'
 
   ios-api-canaries:
     runs-on: macos-latest
