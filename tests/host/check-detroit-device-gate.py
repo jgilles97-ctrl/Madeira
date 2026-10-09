@@ -3,9 +3,9 @@
 
 This does not pretend to execute an iPad. It protects the properties that make
 our eventual physical-device result meaningful: strict ordered Windows canaries,
-finite recovery, durable proof only after 120 presented frames, foreground-only
-qualification, binding to both the exact x64 canaries and the exact local
-MoltenVK/Wine/FEX/iOS bridge runtime, a plain-language proof-status diagnosis,
+finite recovery, durable PASS proof only after 120 presented frames, separate
+non-qualifying failure diagnosis, foreground-only qualification, binding to both
+the exact x64 canaries and the exact local MoltenVK/Wine/FEX/iOS bridge runtime,
 and a deliberately narrow one-tap route.
 """
 
@@ -63,16 +63,34 @@ def main() -> None:
     ):
         require(gate, needle, label)
 
+    # Success proof remains strict and success-only.
     require(gate, '#define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"', "proof schema")
     require(gate, '#define PROOF_PATH "C:\\\\madeira-detroit-vulkan-gate.txt"', "fixed proof path")
-    require(gate, "clear_stale_proof();", "stale proof deletion before testing")
+    require(gate, "clear_stale_state();", "stale state deletion before testing")
     require(gate, "DeleteFileA(PROOF_PATH)", "stale proof removal")
-    require(gate, "FILE_FLAG_WRITE_THROUGH", "durable proof file create")
-    require(gate, "FlushFileBuffers(file)", "proof flush")
+    require(gate, "FILE_FLAG_WRITE_THROUGH", "durable state file create")
+    require(gate, "FlushFileBuffers(file)", "proof/result flush")
     require(gate, "MoveFileExA(PROOF_TEMP_PATH, PROOF_PATH", "atomic proof publication")
-    require(gate, "MOVEFILE_WRITE_THROUGH", "durable proof rename")
+    require(gate, "MOVEFILE_WRITE_THROUGH", "durable atomic rename")
     require(gate, "PROOF_RESULT=NOT_WRITTEN", "failed-gate proof suppression")
     require(gate, "FAILED_GATE=proof-publication", "proof publication failure gate")
+
+    # Failure diagnosis is durable but deliberately NOT proof.
+    require(gate, '#define RESULT_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_RESULT_V1"', "last-result schema")
+    require(gate, '#define RESULT_PATH "C:\\\\madeira-detroit-vulkan-last-result.txt"', "last-result path")
+    require(gate, "DeleteFileA(RESULT_PATH)", "stale last-result removal")
+    require(gate, "static void write_last_result", "non-qualifying result writer")
+    require(gate, "LAST_RESULT_RECORD=PASS", "last-result publication marker")
+    require(gate, 'write_last_result(0, 0, "FAIL", "payload-fingerprint"', "payload fingerprint failure record")
+    require(gate, 'write_last_result(payload_hash, 1, "FAIL", stages[i].name', "stage failure record")
+    require(gate, 'write_last_result(payload_hash, 1, "FAIL", "foreground-integrity"', "foreground failure record")
+    require(gate, 'write_last_result(payload_hash, 1, "FAIL", "proof-publication"', "proof-publication failure record")
+    require(gate, 'write_last_result(payload_hash, 1, "PASS", "none"', "successful last-result record")
+    require_order(
+        gate,
+        ["write_full_pass_proof(payload_hash)", 'write_last_result(payload_hash, 1, "PASS", "none"', 'printf("OVERALL=PASS'],
+        "success proof/result publication",
+    )
 
     require(gate, "FNV64_OFFSET", "Windows payload fingerprint offset")
     require(gate, "FNV64_PRIME", "Windows payload fingerprint prime")
@@ -80,10 +98,9 @@ def main() -> None:
     require(gate, '"PAYLOAD_FNV64=%016llx', "payload identity in Windows output/proof")
     require(gate, "FAILED_GATE=payload-fingerprint", "fingerprint failure gate")
 
-    # The gate executable itself must carry a deterministic ID derived from the
-    # runtime inputs built immediately before it. Since both Windows and Swift
-    # fingerprint that executable, this extends stale-proof rejection from the
-    # four canaries to the renderer/runtime that actually executed them.
+    # The gate executable itself carries a deterministic ID derived from runtime
+    # inputs. Fingerprinting the executable therefore binds physical proof to the
+    # renderer/runtime as well as to the canary programs.
     require(builder, "DETROIT_RUNTIME_BUILD_ID", "runtime identity builder input")
     require(builder, "MADEIRA_DETROIT_RUNTIME_BUILD_ID=", "embedded runtime identity marker")
     require(builder, "standalone-unbound", "explicit non-qualification identity for standalone CI builds")
@@ -106,7 +123,6 @@ def main() -> None:
     ):
         require(orchestrator, needle, label)
 
-    # Foreground integrity is part of the proof, not merely UI advice.
     require(gate, '#define FOREGROUND_INVALID_PATH "C:\\\\madeira-detroit-vulkan-gate-invalid.txt"', "foreground marker path")
     require(gate, "DeleteFileA(FOREGROUND_INVALID_PATH)", "foreground marker reset at gate start")
     require(gate, "GetFileAttributesA(FOREGROUND_INVALID_PATH)", "foreground marker check")
@@ -124,7 +140,6 @@ def main() -> None:
     if "sci.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR" in swapchain:
         raise AssertionError("physical baseline gate must not silently switch to immediate/uncapped presentation")
     require(swapchain, "TARGET_FRAMES 120u", "120-frame presentation duration")
-
     require(gate, "if (exit_code != 0)", "nonzero-child failure")
     require_order(gate, ["VULKAN_DEVICE=PASS", "WIN32_SURFACE=PASS", "PRESENTED_120_FRAMES=PASS", 'printf("OVERALL=PASS'], "final runtime PASS markers")
 
@@ -166,6 +181,8 @@ def main() -> None:
 
     require(app, "DetroitVulkanDeviceGateProof", "iPad proof reader")
     require(app, 'schema = "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"', "matching iPad proof schema")
+    require(app, 'lastResultSchema = "MADEIRA_DETROIT_DEVICE_GATE_RESULT_V1"', "matching diagnostic-result schema")
+    require(app, '"madeira-detroit-vulkan-last-result.txt"', "last-result reader path")
     require(app, "bundledPayloadFingerprint()", "iPad current-payload fingerprint")
     require(app, 'values["EXECUTION"] == "physical-device-local"', "physical execution marker")
     require(app, 'values["FOREGROUND_INTEGRITY"] == "PASS"', "foreground PASS proof")
@@ -182,27 +199,36 @@ def main() -> None:
     require(app, "@Environment(\\.scenePhase)", "scene phase observation")
     require(app, "if phase != .active", "inactive/background invalidation trigger")
 
-    # A Boolean alone is not enough for the first real-device session. Preserve
-    # distinct, actionable status classes for no proof, foreground loss, stale
-    # runtime, malformed/old proof, non-physical proof, incomplete pass, and a
-    # current verified pass.
     for needle, label in (
         ("enum Status: Equatable", "typed physical proof status"),
-        ("case passed", "passed proof state"),
-        ("case notRun", "never-run proof state"),
-        ("case foregroundLost", "foreground-loss proof state"),
-        ("case malformedProof", "malformed proof state"),
-        ("case wrongSchema", "old-schema proof state"),
-        ("case wrongArchitecture", "wrong-architecture proof state"),
-        ("case notPhysicalDevice", "non-physical proof state"),
+        ("case passed", "passed state"),
+        ("case notRun", "never-run state"),
+        ("case foregroundLost", "foreground-loss state"),
+        ("case malformedProof", "malformed record state"),
+        ("case wrongSchema", "old-schema state"),
+        ("case wrongArchitecture", "wrong-architecture state"),
+        ("case notPhysicalDevice", "non-physical state"),
         ("case incompletePass", "incomplete pass state"),
         ("case currentPayloadUnreadable", "unreadable current payload state"),
         ("case payloadChanged", "runtime/payload changed state"),
-        ("The local graphics runtime changed since the last pass", "plain stale-runtime explanation"),
-        ("The previous test left the foreground", "plain foreground explanation"),
-        ("Not yet proven on this iPad", "plain not-run explanation"),
-        ("static var validForCurrentPayload: Bool { status.passed }", "boolean compatibility from typed status"),
-        ("Text(status.explanation)", "visible proof-status explanation"),
+        ("case payloadFingerprintFailed", "payload-fingerprint failure state"),
+        ("case vulkanDeviceFailed", "Vulkan-device failure state"),
+        ("case win32SurfaceFailed", "Win32-surface failure state"),
+        ("case presentationFailed", "120-frame presentation failure state"),
+        ("case proofPublicationFailed", "proof publication failure state"),
+        ("case unknownFailure", "unknown failure state"),
+        ("statusFromLastResult", "non-qualifying result classifier"),
+        ('case "vulkan-device": return .vulkanDeviceFailed', "Vulkan failure mapping"),
+        ('case "win32-surface": return .win32SurfaceFailed', "surface failure mapping"),
+        ('case "present-120": return .presentationFailed', "presentation failure mapping"),
+        ('case "foreground-integrity": return .foregroundLost', "foreground failure mapping"),
+        ('case "proof-publication": return .proofPublicationFailed', "proof failure mapping"),
+        ("The local graphics runtime changed since the last test", "plain stale-runtime explanation"),
+        ("The basic Vulkan device test failed", "plain Vulkan failure explanation"),
+        ("Windows-window to iPad Metal-surface test failed", "plain surface failure explanation"),
+        ("120-frame presentation test", "plain presentation failure explanation"),
+        ("static var validForCurrentPayload: Bool { status.passed }", "success-only qualification Boolean"),
+        ("Text(status.explanation)", "visible proof/failure explanation"),
     ):
         require(app, needle, label)
 
@@ -210,10 +236,11 @@ def main() -> None:
     require(shortcuts, '@Published var pendingExe: String?', "existing pending library executable route")
 
     print("PASS: Detroit device gate contract")
-    print("PASS: durable proof is cleared first and published only after full physical pass")
+    print("PASS: durable PASS proof is published only after full physical success")
+    print("PASS: failures persist only as non-qualifying diagnosis")
     print("PASS: physical proof is tied to the current x64 canaries and local graphics/runtime build")
     print("PASS: physical proof is rejected if Madeira leaves the foreground during the gate")
-    print("PASS: proof failures are explained on-device instead of collapsing to an opaque Boolean")
+    print("PASS: the iPad UI explains the exact failed graphics stage when available")
     print("PASS: one-tap iPad gate remains fixed, x64-verified, contained, and library-routed")
 
 
