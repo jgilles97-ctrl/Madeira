@@ -69,13 +69,7 @@ def _find_first(root: pathlib.Path | None, names: Iterable[str]) -> pathlib.Path
 
 
 def _config_value(text: str, key: str) -> str | None:
-    """Return the last Madeira-style KEY=value or env.KEY=value setting.
-
-    Per-game config is intentionally line based. Ignore full-line comments and
-    inline comments so a documented example does not get mistaken for an active
-    setting. Last assignment wins, matching the way a user expects overrides to
-    behave when a setting is repeated later in a game-specific profile.
-    """
+    """Return the last Madeira-style KEY=value or env.KEY=value setting."""
 
     result: str | None = None
     pattern = re.compile(rf"^(?:env\.)?{re.escape(key)}\s*=\s*(.*?)\s*$", re.I)
@@ -89,6 +83,146 @@ def _config_value(text: str, key: str) -> str | None:
     return result
 
 
+def _check_environment(env_text: str) -> list[Check]:
+    checks: list[Check] = []
+
+    compression = _config_value(env_text, "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM")
+    if compression == "3":
+        checks.append(
+            Check(
+                "shader_compression",
+                "PASS",
+                "Detroit shader compression uses the known-good algorithm",
+                "algorithm 3 is LZ4; this reduces retained shader-source memory during Detroit's large shader workload",
+            )
+        )
+    elif compression is not None:
+        checks.append(
+            Check(
+                "shader_compression",
+                "WARN",
+                "Detroit shader compression differs from the tested Apple-Silicon setting",
+                f"value={compression}; the first 8 GB iPad profile uses 3 (LZ4)",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "shader_compression",
+                "WARN",
+                "MoltenVK shader compression is not visible in the supplied config",
+                "Set MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3 for the first 8 GB iPad shader pass.",
+            )
+        )
+
+    # This desktop-oriented switch is deliberately informational on iOS. Do not
+    # count it as either an optimization or a defect in the iPad baseline.
+    concurrent = _config_value(env_text, "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION")
+    if concurrent is not None:
+        checks.append(
+            Check(
+                "concurrent_compilation_ios_noop",
+                "INFO",
+                "Concurrent-compilation setting is ignored on iOS",
+                f"value={concurrent}; it is not an iPad memory or speed lever",
+            )
+        )
+
+    process_cache = _config_value(env_text, "MVK_DTR_MSL_LIBRARY_CACHE")
+    if process_cache == "0":
+        checks.append(
+            Check(
+                "dtr_msl_library_cache",
+                "PASS",
+                "Release003 process-wide Metal library retention is disabled",
+                "This is the memory-first 8 GB baseline; compiled MTLLibrary objects are not kept in the fork's global process map.",
+            )
+        )
+    elif process_cache == "1":
+        checks.append(
+            Check(
+                "dtr_msl_library_cache",
+                "WARN",
+                "Release003 process-wide Metal library retention is enabled",
+                "This can retain compiled MTLLibrary objects for the process lifetime and is high-risk until measured on the 8 GB iPad.",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "dtr_msl_library_cache",
+                "WARN",
+                "Release003 process-wide Metal library retention is not explicitly disabled",
+                "Set MVK_DTR_MSL_LIBRARY_CACHE=0 for the first 8 GB iPad shader pass.",
+            )
+        )
+
+    # Madeira's audited cache-split patch makes persistent disk caching
+    # independent of the process-wide MTLLibrary retention map. A READY profile
+    # must explicitly request that split; otherwise repeated shader work can be
+    # needlessly thrown away between runs.
+    disk_cache = _config_value(env_text, "MVK_DTR_MSL_LIBRARY_DISK_CACHE")
+    if disk_cache == "1":
+        checks.append(
+            Check(
+                "dtr_msl_library_disk_cache",
+                "PASS",
+                "Persistent Detroit Metal shader cache is enabled",
+                "The 8 GB baseline keeps disk reuse/source collection while the process-wide MTLLibrary retention map stays off.",
+            )
+        )
+    elif disk_cache == "0":
+        checks.append(
+            Check(
+                "dtr_msl_library_disk_cache",
+                "WARN",
+                "Persistent Detroit Metal shader cache is disabled",
+                "This is safe for RAM but throws away an important repeat-run optimization; the qualified 8 GB profile uses MVK_DTR_MSL_LIBRARY_DISK_CACHE=1.",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "dtr_msl_library_disk_cache",
+                "WARN",
+                "Persistent Detroit Metal shader cache is not explicitly enabled",
+                "Madeira's low-memory cache split requires MVK_DTR_MSL_LIBRARY_DISK_CACHE=1 alongside MVK_DTR_MSL_LIBRARY_CACHE=0.",
+            )
+        )
+
+    if process_cache == "0" and disk_cache == "1":
+        checks.append(
+            Check(
+                "dtr_cache_split",
+                "PASS",
+                "Detroit low-memory cache split is active",
+                "RAM retention off; persistent disk cache on.",
+            )
+        )
+
+    device_stats = _config_value(env_text, "MADEIRA_DEVICE_STATS")
+    if device_stats == "1":
+        checks.append(
+            Check(
+                "device_stats",
+                "PASS",
+                "Madeira device diagnostics are enabled",
+                "the long shader test can record app memory headroom, current/peak footprint, thermal state, and Low Power Mode",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "device_stats",
+                "INFO",
+                "Madeira device diagnostics are not enabled",
+                "MADEIRA_DEVICE_STATS=1 is recommended for the first long Detroit shader run.",
+            )
+        )
+
+    return checks
+
+
 def audit(
     game_dir: pathlib.Path | None,
     graphics_options: pathlib.Path | None,
@@ -98,7 +232,6 @@ def audit(
 ) -> dict[str, object]:
     checks: list[Check] = []
 
-    # Game payload
     exe = _find_first(game_dir, ("DetroitBecomeHuman.exe",)) if game_dir else None
     if exe:
         try:
@@ -107,21 +240,12 @@ def audit(
             size = 0
         checks.append(Check("game_exe", "PASS", "Detroit executable found", str(exe)))
         if size and size < 10 * 1024 * 1024:
-            checks.append(
-                Check(
-                    "game_exe_size",
-                    "WARN",
-                    "Detroit executable is unexpectedly small",
-                    _human_bytes(size),
-                )
-            )
+            checks.append(Check("game_exe_size", "WARN", "Detroit executable is unexpectedly small", _human_bytes(size)))
     elif game_dir:
         checks.append(Check("game_exe", "FAIL", "DetroitBecomeHuman.exe was not found", str(game_dir)))
     else:
         checks.append(Check("game_exe", "INFO", "Game directory was not supplied"))
 
-    # GraphicOptions.JSON: Detroit's current MoltenVK compatibility path has a
-    # known depth-of-field rendering problem.
     if graphics_options is None:
         graphics_options = _find_first(game_dir, ("GraphicOptions.JSON",)) if game_dir else None
     if graphics_options and graphics_options.exists():
@@ -144,7 +268,6 @@ def audit(
     else:
         checks.append(Check("graphics_options", "INFO", "GraphicOptions.JSON was not supplied/found"))
 
-    # Shader cache. Never mutate it here.
     if shader_cache is None and game_dir:
         candidate = game_dir / "ShaderCache"
         if candidate.exists():
@@ -167,115 +290,23 @@ def audit(
                     "shader_cache_size",
                     "WARN",
                     "Shader cache exceeds 4 GiB",
-                    "Large caches are especially important to track on an 8 GB iPad because shader finalization has caused large memory spikes.",
+                    "Track large caches carefully during the 8 GB shader-compilation qualification.",
                 )
             )
     else:
         checks.append(Check("shader_cache", "INFO", "Shader cache was not supplied/found"))
 
-    # Environment / launcher configuration. The first 8 GB iPad pass optimizes
-    # for measured peak memory, not desktop assumptions.
     env_text = _read(env_file)
     if env_file:
         if not env_text:
             checks.append(Check("env_file", "FAIL", "Environment/config file could not be read", str(env_file)))
         else:
-            compression = _config_value(env_text, "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM")
-            if compression == "3":
-                checks.append(
-                    Check(
-                        "shader_compression",
-                        "PASS",
-                        "Detroit shader compression uses the known-good algorithm",
-                        "algorithm 3 is LZ4; MoltenVK documents shader-source compression as a way to reduce large retained MSL-source memory",
-                    )
-                )
-            elif compression is not None:
-                checks.append(
-                    Check(
-                        "shader_compression",
-                        "WARN",
-                        "Detroit shader compression differs from the tested Apple-Silicon setting",
-                        f"value={compression}; the first iPad profile uses 3 (LZ4)",
-                    )
-                )
-            else:
-                checks.append(
-                    Check(
-                        "shader_compression",
-                        "WARN",
-                        "MoltenVK shader compression is not visible in the supplied config",
-                        "Successful full-game Apple-Silicon Detroit runs used algorithm 3, and MoltenVK documents shader-source retention as potentially significant memory use.",
-                    )
-                )
-
-            # The Detroit macOS recipe sets this to 1, but current MoltenVK
-            # explicitly documents this setting as having no effect on iOS or
-            # tvOS. Never count 0 as an iPad memory optimization.
-            concurrent = _config_value(env_text, "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION")
-            if concurrent is not None:
-                checks.append(
-                    Check(
-                        "concurrent_compilation_ios_noop",
-                        "INFO",
-                        "Concurrent-compilation setting is ignored on iOS",
-                        f"value={concurrent}; MoltenVK documents this switch as macOS-only, so it is not an iPad memory or speed lever",
-                    )
-                )
-
-            msl_cache = _config_value(env_text, "MVK_DTR_MSL_LIBRARY_CACHE")
-            if msl_cache == "0":
-                checks.append(
-                    Check(
-                        "dtr_msl_library_cache",
-                        "PASS",
-                        "Release003 custom process-wide Metal library cache is disabled",
-                        "memory-first 8 GB baseline; re-enable only after device measurements show the retained libraries fit comfortably",
-                    )
-                )
-            elif msl_cache == "1":
-                checks.append(
-                    Check(
-                        "dtr_msl_library_cache",
-                        "WARN",
-                        "Release003 custom Metal library cache is enabled",
-                        "The Detroit fork keeps compiled MTLLibrary objects in a process-wide map for the process lifetime. This is high-risk until measured on an 8 GB iPad.",
-                    )
-                )
-            else:
-                checks.append(
-                    Check(
-                        "dtr_msl_library_cache",
-                        "WARN",
-                        "Release003 custom Metal library cache is not explicitly disabled",
-                        "Its fork default is enabled; set MVK_DTR_MSL_LIBRARY_CACHE=0 for the first 8 GB iPad shader pass.",
-                    )
-                )
-
-            device_stats = _config_value(env_text, "MADEIRA_DEVICE_STATS")
-            if device_stats == "1":
-                checks.append(
-                    Check(
-                        "device_stats",
-                        "PASS",
-                        "Madeira device diagnostics are enabled",
-                        "the long shader test will record current app memory headroom, current/peak footprint, thermal state, and Low Power Mode",
-                    )
-                )
-            else:
-                checks.append(
-                    Check(
-                        "device_stats",
-                        "INFO",
-                        "Madeira device diagnostics are not enabled",
-                        "MADEIRA_DEVICE_STATS=1 is recommended for the first long Detroit shader run.",
-                    )
-                )
+            checks.extend(_check_environment(env_text))
     else:
         checks.append(Check("env_file", "INFO", "No Madeira/MoltenVK environment file supplied"))
 
-    # Runtime log signatures. Order keeps lower-level loader/driver failures
-    # visible before Detroit-specific shader errors.
+    # Lower-level loader/driver failures come first so a Detroit shader symptom
+    # is not blamed on the game when Vulkan itself never initialized correctly.
     log_text = _read(log_file)
     known_log_rules: tuple[tuple[str, str, str, re.Pattern[str], str], ...] = (
         (
@@ -307,6 +338,13 @@ def audit(
             "Verify IOSDisplayShim exports and the per-window Metal-layer lifetime bridge before launching Detroit.",
         ),
         (
+            "vulkan_device_lost",
+            "FAIL",
+            "Vulkan device was lost",
+            re.compile(r"VK_ERROR_DEVICE_LOST|device lost", re.I),
+            "Keep the app foregrounded during qualification and preserve the surrounding Metal/MoltenVK lines; do not accept this run as physical proof.",
+        ),
+        (
             "mvk_init_failure",
             "FAIL",
             "MoltenVK reported pipeline/shader initialization failure",
@@ -318,7 +356,7 @@ def audit(
             "FAIL",
             "Known Detroit R32Uint blending incompatibility detected",
             re.compile(r"(?:R32Uint.{0,100}blend|blend.{0,100}R32Uint)", re.I),
-            "The Detroit MoltenVK fork contains a targeted workaround for this class of pipeline.",
+            "Verify the Detroit-specific MoltenVK compatibility path is the one actually built and linked.",
         ),
         (
             "missing_vertex_attribute",
@@ -339,7 +377,7 @@ def audit(
             "FAIL",
             "Known later-game shader-interface failure detected",
             re.compile(r"user\(locn10\).{0,120}(?:mismatch|not written)", re.I),
-            "This was exposed by later chapters such as On The Run; use a Detroit fork carrying the corresponding SPIRV-Cross/MoltenVK fix.",
+            "This was exposed by later chapters such as On The Run; preserve the exact shader diagnostic for regression work.",
         ),
         (
             "shader_98_percent",
@@ -351,9 +389,13 @@ def audit(
         (
             "memory_pressure",
             "FAIL",
-            "Possible memory-pressure / jetsam failure detected",
-            re.compile(r"jetsam|memorystatus|out of memory|STATUS_NO_MEMORY|c0000017", re.I),
-            "Preserve the log and run tools/detroit_memory_report.py; compare app headroom/footprint near the failure with shader progress, cache size, compression, and Memory+ state.",
+            "Possible memory-pressure / out-of-memory failure detected",
+            re.compile(
+                r"jetsam|memorystatus|out of memory|STATUS_NO_MEMORY|c0000017|"
+                r"VK_ERROR_OUT_OF_(?:DEVICE|HOST)_MEMORY|kIOGPUCommandBufferCallbackErrorOutOfMemory",
+                re.I,
+            ),
+            "Preserve the log and run tools/detroit_memory_report.py; compare memory headroom with shader progress and cache state.",
         ),
     )
 
@@ -385,18 +427,14 @@ def audit(
             "This is a readiness/triage tool, not proof that Detroit is compatible with the device.",
             "It never modifies or deletes the game, cache, configuration, or log files.",
             "The 8 GB memory profile is a conservative first-test baseline, not a claim that faster settings are impossible.",
-            "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION is not counted as an iPad optimization because MoltenVK documents it as ineffective on iOS/tvOS.",
+            "The qualified low-memory cache split is RAM retention off plus persistent disk cache on.",
+            "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION is not counted as an iPad optimization.",
         ],
     }
 
 
 def render(report: dict[str, object]) -> str:
-    lines = [
-        "# Detroit / Madeira readiness",
-        "",
-        f"Overall: {report['overall']}",
-        "",
-    ]
+    lines = ["# Detroit / Madeira readiness", "", f"Overall: {report['overall']}", ""]
     checks = report.get("checks", [])
     if isinstance(checks, list):
         for raw in checks:
