@@ -8,8 +8,10 @@ on:
       - "tests/host/check-detroit-vulkan-contract.py"
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
+      - "tests/x64/vulkan_swapchain_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
+      - "tests/x64/build-vulkan-swapchain-probe.sh"
       - "build/moltenvk-ios/build.sh"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
@@ -28,8 +30,10 @@ on:
       - "tests/host/check-detroit-vulkan-contract.py"
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
+      - "tests/x64/vulkan_swapchain_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
+      - "tests/x64/build-vulkan-swapchain-probe.sh"
       - "build/moltenvk-ios/build.sh"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
@@ -69,6 +73,7 @@ jobs:
           bash -n build/win32u-unix/build.sh
           bash -n tests/x64/build-vulkan-probe.sh
           bash -n tests/x64/build-vulkan-wsi-probe.sh
+          bash -n tests/x64/build-vulkan-swapchain-probe.sh
       - name: Detroit readiness fixtures
         run: python tests/host/check-detroit-readiness.py
       - name: Detroit Vulkan contract
@@ -117,8 +122,15 @@ jobs:
           VULKAN_HEADERS: /tmp/vulkan-headers
           VULKAN_WSI_PROBE_OUT: /tmp/vulkan_wsi_probe.exe
         run: bash tests/x64/build-vulkan-wsi-probe.sh
+      - name: Compile Windows x64 swapchain Vulkan probe
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_SWAPCHAIN_PROBE_OUT: /tmp/vulkan_swapchain_probe.exe
+        run: bash tests/x64/build-vulkan-swapchain-probe.sh
       - name: Verify PE artifacts
         run: |
-          file /tmp/vulkan_probe.exe /tmp/vulkan_wsi_probe.exe
+          file /tmp/vulkan_probe.exe /tmp/vulkan_wsi_probe.exe /tmp/vulkan_swapchain_probe.exe
           file /tmp/vulkan_probe.exe | grep -qi 'PE32+'
           file /tmp/vulkan_wsi_probe.exe | grep -qi 'PE32+'
+          file /tmp/vulkan_swapchain_probe.exe | grep -qi 'PE32+'
