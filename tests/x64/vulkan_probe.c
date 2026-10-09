@@ -10,6 +10,11 @@
  * capability: it must be advertised and successfully enabled on VkDevice.
  * Individual descriptor-indexing feature bits are printed for device evidence;
  * we do not invent stricter per-bit requirements without game evidence.
+ *
+ * VK_EXT_memory_budget is telemetry-only. MoltenVK supports it, but its iOS
+ * semantics have had an open upstream discussion. We record budget, usage, and
+ * budget+usage alongside Madeira's Apple process-memory telemetry without using
+ * these Vulkan numbers to pass or fail the gate.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -21,7 +26,7 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 
-#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V2"
+#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V3"
 
 static int has_extension(const VkExtensionProperties *exts, uint32_t count,
                          const char *name)
@@ -56,6 +61,7 @@ int main(void)
     PFN_vkEnumeratePhysicalDevices enumerate_physical_devices = NULL;
     PFN_vkGetPhysicalDeviceProperties get_physical_device_properties = NULL;
     PFN_vkGetPhysicalDeviceMemoryProperties get_memory_properties = NULL;
+    PFN_vkGetPhysicalDeviceMemoryProperties2 get_memory_properties2 = NULL;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties get_queue_properties = NULL;
     PFN_vkEnumerateDeviceExtensionProperties enumerate_device_extensions = NULL;
     PFN_vkGetPhysicalDeviceFeatures2 get_physical_device_features2 = NULL;
@@ -134,9 +140,6 @@ int main(void)
                          VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME));
 #endif
 #ifdef VK_EXT_METAL_SURFACE_EXTENSION_NAME
-    /* A healthy Wine guest normally sees Win32 surface semantics, not the
-     * host-only Metal surface extension. Print this to catch accidental host
-     * API leakage, but do not fail headless probing on it. */
     printf("GUEST_SEES_EXT_METAL_SURFACE=%d\n",
            has_extension(instance_exts, instance_ext_count,
                          VK_EXT_METAL_SURFACE_EXTENSION_NAME));
@@ -152,7 +155,7 @@ int main(void)
         memset(&app_info, 0, sizeof(app_info));
         app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app_info.pApplicationName = "Madeira Detroit Vulkan Probe";
-        app_info.applicationVersion = VK_MAKE_VERSION(2, 0, 0);
+        app_info.applicationVersion = VK_MAKE_VERSION(3, 0, 0);
         app_info.pEngineName = "Madeira";
         app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
         app_info.apiVersion = loader_version >= VK_API_VERSION_1_1
@@ -193,6 +196,9 @@ int main(void)
     get_memory_properties =
         (PFN_vkGetPhysicalDeviceMemoryProperties)get_instance_proc_addr(
             instance, "vkGetPhysicalDeviceMemoryProperties");
+    get_memory_properties2 =
+        (PFN_vkGetPhysicalDeviceMemoryProperties2)get_instance_proc_addr(
+            instance, "vkGetPhysicalDeviceMemoryProperties2");
     get_queue_properties =
         (PFN_vkGetPhysicalDeviceQueueFamilyProperties)get_instance_proc_addr(
             instance, "vkGetPhysicalDeviceQueueFamilyProperties");
@@ -282,6 +288,46 @@ int main(void)
     printf("HAS_EXT_DESCRIPTOR_INDEXING=%d\n", descriptor_indexing_available);
 #else
     printf("HAS_EXT_DESCRIPTOR_INDEXING=0\n");
+#endif
+#ifdef VK_EXT_MEMORY_BUDGET_EXTENSION_NAME
+    {
+        int memory_budget_available =
+            has_extension(device_exts, device_ext_count, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        printf("HAS_EXT_MEMORY_BUDGET=%d\n", memory_budget_available);
+        if (memory_budget_available && get_memory_properties2) {
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget;
+            VkPhysicalDeviceMemoryProperties2 mem2;
+            memset(&budget, 0, sizeof(budget));
+            memset(&mem2, 0, sizeof(mem2));
+            budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+            mem2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+            mem2.pNext = &budget;
+            get_memory_properties2(physical_devices[0], &mem2);
+            printf("MEMORY_BUDGET_HEAP_COUNT=%u\n", mem2.memoryProperties.memoryHeapCount);
+            for (i = 0; i < mem2.memoryProperties.memoryHeapCount; ++i) {
+                unsigned long long raw_budget = (unsigned long long)budget.heapBudget[i];
+                unsigned long long raw_usage = (unsigned long long)budget.heapUsage[i];
+                unsigned long long budget_plus_usage =
+                    raw_budget > UINT64_MAX - raw_usage ? UINT64_MAX : raw_budget + raw_usage;
+                printf("MEMORY_BUDGET_HEAP_%u_BUDGET_BYTES=%llu\n", i, raw_budget);
+                printf("MEMORY_BUDGET_HEAP_%u_USAGE_BYTES=%llu\n", i, raw_usage);
+                printf("MEMORY_BUDGET_HEAP_%u_BUDGET_PLUS_USAGE_BYTES=%llu\n",
+                       i, budget_plus_usage);
+                if (raw_budget)
+                    printf("MEMORY_BUDGET_HEAP_%u_USAGE_PERMILLE_OF_BUDGET=%llu\n",
+                           i, (raw_usage * 1000ull) / raw_budget);
+            }
+            printf("MEMORY_BUDGET_SEMANTICS=TELEMETRY_ONLY_MOLTENVK_IOS\n");
+            printf("MEMORY_BUDGET_TELEMETRY=PASS\n");
+        } else if (memory_budget_available) {
+            printf("MEMORY_BUDGET_TELEMETRY=QUERY_ENTRYPOINT_UNAVAILABLE\n");
+        } else {
+            printf("MEMORY_BUDGET_TELEMETRY=EXTENSION_UNAVAILABLE\n");
+        }
+    }
+#else
+    printf("HAS_EXT_MEMORY_BUDGET=0\n");
+    printf("MEMORY_BUDGET_TELEMETRY=HEADERS_UNAVAILABLE\n");
 #endif
 #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
     printf("HAS_KHR_PORTABILITY_SUBSET=%d\n",
