@@ -20,6 +20,12 @@
  * either the canaries or that runtime changes. Madeira recomputes the fingerprint
  * from the currently installed app and rejects stale proof automatically.
  *
+ * The first canary is Detroit-aware. A zero exit means the current local path
+ * proved Detroit's evidence-backed Vulkan baseline: Vulkan 1.1, at least one
+ * compute-capable queue, and VK_EXT_descriptor_indexing enabled on VkDevice.
+ * This controller promotes that successful child result into an explicit
+ * DETROIT_CAPABILITIES=PASS field in the durable physical-device proof.
+ *
  * iOS may refuse active Metal command buffers when an app leaves the foreground.
  * Madeira writes a fixed invalidation marker if this diagnostic becomes inactive
  * while its Wine process is running. This controller clears that marker before
@@ -232,6 +238,7 @@ static int write_full_pass_proof(uint64_t payload_hash)
         "EXECUTION=physical-device-local\r\n"
         "FOREGROUND_INTEGRITY=PASS\r\n"
         "PAYLOAD_FNV64=%016llx\r\n"
+        "DETROIT_CAPABILITIES=PASS\r\n"
         "VULKAN_DEVICE=PASS\r\n"
         "WIN32_SURFACE=PASS\r\n"
         "PRESENTED_120_FRAMES=PASS\r\n"
@@ -406,6 +413,7 @@ int main(void)
         }
     }
 
+    printf("DETROIT_CAPABILITIES=PASS\n");
     printf("VULKAN_DEVICE=PASS\n");
     printf("WIN32_SURFACE=PASS\n");
     printf("PRESENTED_120_FRAMES=PASS\n");
