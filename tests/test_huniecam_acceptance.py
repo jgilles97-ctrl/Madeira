@@ -13,9 +13,12 @@ def preflight(): return {"exe_found": True, "identity": {"exe_sha256": "abc", "p
 def session(stage=75): return {"deepest_stage": stage}
 def saves(): return {"schema": "MADEIRA_HUNIECAM_SAVE_VERIFY_V2", "progress_write_detected": True, "save_tree_survived_relaunch": True, "same_source_directory_proven": True, "expected_save_folder_proven": True, "machine_gate_pass": True, "errors": []}
 def performance(clean=True): return {"comparison_clean": clean}
-def context(run="run-1", build="build-1", profile="profile-1", ready=True, schema="MADEIRA_HUNIECAM_RUN_CONTEXT_V2"): return {"schema": schema, "ready": ready, "run_id_sha256": run, "build_fingerprint_sha256": build, "profile_sha256": profile, "guard_sha256": "guard", "performance_sha256": "perf"}
-def contract(valid=True, run="run-1", schema="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V3"): return {"schema": schema, "valid": valid, "run_id_sha256": run}
-def repeatability(passed=True, build="build-1", profile="profile-1", runs=("run-1", "run-2", "run-3"), schema="MADEIRA_HUNIECAM_REPEATABILITY_V2"): return {"schema": schema, "passed": passed, "build_fingerprint_sha256": build, "profile_sha256": profile, "runs": [{"run_id_sha256": run} for run in runs]}
+def context(run="run-1", build="build-1", profile="profile-1", native="native-1", ready=True, schema="MADEIRA_HUNIECAM_RUN_CONTEXT_V2"):
+    return {"schema": schema, "ready": ready, "run_id_sha256": run, "build_fingerprint_sha256": build, "profile_sha256": profile, "guard_sha256": "guard", "performance_sha256": "perf", "pe_imports_sha256": "pe", "native_modules_sha256": "modules", "native_module_set_sha256": native}
+def contract(valid=True, run="run-1", complete=True, schema="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4"):
+    return {"schema": schema, "valid": valid, "run_id_sha256": run, "run_context_v2_complete": complete}
+def repeatability(passed=True, build="build-1", profile="profile-1", native="native-1", runs=("run-1", "run-2", "run-3"), schema="MADEIRA_HUNIECAM_REPEATABILITY_V3"):
+    return {"schema": schema, "passed": passed, "build_fingerprint_sha256": build, "profile_sha256": profile, "native_module_set_sha256": native, "runs": [{"run_id_sha256": run} for run in runs]}
 
 def full_manual_counts(run="run-1", build="build-1", profile="profile-1"):
     return {"run_id_sha256": run, "build_fingerprint_sha256": build, "profile_sha256": profile, "jit_memory_ready": True, "real_gameplay": True, "rendering_correct": True, "pointer_points_tested": 9, "pointer_points_passed": 9, "audio_correct": True, "save_progress_visible_after_relaunch": True, "performance_acceptable": True, "stable_minutes": 30, "cold_launches": 3, "suspend_resume_cycles": 2, "repeatable_profile": True}
@@ -29,7 +32,7 @@ def evaluate(manual=None, save=None, perf=None, cont=None, ctx=None, repeat=None
 
 class HunieCamAcceptanceTests(unittest.TestCase):
     def test_full_current_evidence_accepts(self):
-        report = evaluate(); self.assertTrue(report["accepted"]); self.assertEqual(report["schema"], "MADEIRA_HUNIECAM_ACCEPTANCE_V7"); self.assertEqual(report["counts"]["FAIL"], 0); self.assertEqual(report["counts"]["UNKNOWN"], 0)
+        report = evaluate(); self.assertTrue(report["accepted"]); self.assertEqual(report["schema"], "MADEIRA_HUNIECAM_ACCEPTANCE_V8"); self.assertEqual(report["counts"]["FAIL"], 0); self.assertEqual(report["counts"]["UNKNOWN"], 0)
     def test_structured_and_normalized_device_evidence_accept(self):
         self.assertTrue(evaluate(manual=full_structured_manual())["accepted"]); wrapped = {"schema": "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2", "normalized": full_structured_manual(), "derived": {}}; self.assertTrue(evaluate(manual=wrapped)["accepted"])
     def test_missing_manual_never_accepts(self):
@@ -38,18 +41,21 @@ class HunieCamAcceptanceTests(unittest.TestCase):
         report = evaluate(manual=full_manual_counts(run="different")); self.assertEqual(next(g for g in report["gates"] if g["name"] == "device_evidence_same_run")["status"], "FAIL")
     def test_context_v1_cannot_finish_cycle6(self):
         report = evaluate(ctx=context(schema="MADEIRA_HUNIECAM_RUN_CONTEXT_V1")); self.assertEqual(next(g for g in report["gates"] if g["name"] == "run_context_v2_ready")["status"], "FAIL"); self.assertFalse(report["accepted"])
-    def test_context_must_seal_guard_and_performance(self):
-        ctx = context(); ctx["guard_sha256"] = None; report = evaluate(ctx=ctx); self.assertFalse(report["accepted"])
-    def test_contract_v2_is_legacy_not_final(self):
-        report = evaluate(cont=contract(schema="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V2")); self.assertEqual(next(g for g in report["gates"] if g["name"] == "evidence_contract_valid")["status"], "FAIL")
+    def test_context_must_seal_guard_performance_and_dependency_audits(self):
+        for key in ("guard_sha256", "performance_sha256", "pe_imports_sha256", "native_modules_sha256", "native_module_set_sha256"):
+            ctx = context(); ctx[key] = None; self.assertFalse(evaluate(ctx=ctx)["accepted"], key)
+    def test_contract_v3_is_legacy_not_final(self):
+        report = evaluate(cont=contract(schema="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V3")); self.assertEqual(next(g for g in report["gates"] if g["name"] == "evidence_contract_valid")["status"], "FAIL")
+    def test_contract_must_mark_context_complete(self):
+        self.assertFalse(evaluate(cont=contract(complete=False))["accepted"])
     def test_save_v1_is_legacy_not_final(self):
         old = {"schema": "MADEIRA_HUNIECAM_SAVE_VERIFY_V1", "progress_write_detected": True, "save_tree_survived_relaunch": True, "machine_gate_pass": True}; report = evaluate(save=old); self.assertEqual(next(g for g in report["gates"] if g["name"] == "save_verify_v2_exact_folder")["status"], "FAIL"); self.assertFalse(report["accepted"])
     def test_save_v2_wrong_folder_blocks(self):
-        bad = saves(); bad["expected_save_folder_proven"] = False; report = evaluate(save=bad); self.assertFalse(report["accepted"])
-    def test_repeatability_v1_is_legacy_not_final(self):
-        report = evaluate(repeat=repeatability(schema="MADEIRA_HUNIECAM_REPEATABILITY_V1")); self.assertEqual(next(g for g in report["gates"] if g["name"] == "three_sealed_cold_launches")["status"], "FAIL")
-    def test_repeatability_must_include_primary_and_match_build_profile(self):
-        self.assertFalse(evaluate(repeat=repeatability(runs=("run-2", "run-3", "run-4")))["accepted"]); self.assertFalse(evaluate(repeat=repeatability(build="other"))["accepted"]); self.assertFalse(evaluate(repeat=repeatability(profile="other"))["accepted"])
+        bad = saves(); bad["expected_save_folder_proven"] = False; self.assertFalse(evaluate(save=bad)["accepted"])
+    def test_repeatability_v2_is_legacy_not_final(self):
+        report = evaluate(repeat=repeatability(schema="MADEIRA_HUNIECAM_REPEATABILITY_V2")); self.assertEqual(next(g for g in report["gates"] if g["name"] == "three_sealed_cold_launches")["status"], "FAIL")
+    def test_repeatability_must_include_primary_and_match_all_fingerprints(self):
+        self.assertFalse(evaluate(repeat=repeatability(runs=("run-2", "run-3", "run-4")))["accepted"]); self.assertFalse(evaluate(repeat=repeatability(build="other"))["accepted"]); self.assertFalse(evaluate(repeat=repeatability(profile="other"))["accepted"]); self.assertFalse(evaluate(repeat=repeatability(native="other"))["accepted"])
     def test_missing_repeatability_is_unknown(self):
         report = mod.evaluate(preflight(), session(), saves(), full_manual_counts(), performance(), contract(), context(), None); self.assertEqual(next(g for g in report["gates"] if g["name"] == "three_sealed_cold_launches")["status"], "UNKNOWN")
     def test_pointer_and_stability_thresholds_fail_hard(self):
