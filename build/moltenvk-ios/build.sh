@@ -21,6 +21,8 @@ MOLTENVK_REF="${MOLTENVK_DETROIT_REF:-$MOLTENVK_DEFAULT_COMMIT}"
 WORK_ROOT="${MOLTENVK_WORK_ROOT:-$REPO_ROOT/.build/moltenvk-detroit-ios}"
 SRC_DIR="$WORK_ROOT/src"
 PREFIX="${MOLTENVK_IOS_PREFIX:-$REPO_ROOT/toolchains/moltenvk-detroit-ios}"
+CACHE_PATCH="$BUILD_DIR/patch_detroit_ipad_cache.py"
+CACHE_PATCH_MARKER="MADEIRA_IPAD_DISK_CACHE_SPLIT_V1"
 
 need() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -64,6 +66,21 @@ if [ -z "${MOLTENVK_DETROIT_REF:-}" ] && [ "$ACTUAL_COMMIT" != "$MOLTENVK_DEFAUL
     echo "actual:   $ACTUAL_COMMIT" >&2
     exit 6
 fi
+
+# Madeira's 8 GB iPad profile needs a behaviour Release003 cannot express:
+# keep the process-wide MTLLibrary retention cache OFF while keeping the disk
+# metallib/source cache ON. Apply a tiny fail-closed source patch after checkout
+# so upstream identity remains auditable and the local delta is reproducible.
+SHADER_MODULE="$SRC_DIR/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm"
+[ -f "$SHADER_MODULE" ] || {
+    echo "error: Detroit MoltenVK shader module missing: $SHADER_MODULE" >&2
+    exit 7
+}
+python3 "$CACHE_PATCH" "$SHADER_MODULE"
+grep -q "$CACHE_PATCH_MARKER" "$SHADER_MODULE" || {
+    echo "error: Detroit iPad shader-cache split did not apply" >&2
+    exit 8
+}
 
 # Release003 depends on matching SPIRV-Cross changes. Always run the project's
 # dependency resolver instead of reusing a random system SPIRV-Cross build.
@@ -120,10 +137,13 @@ source=$MOLTENVK_REPO
 release=$MOLTENVK_RELEASE_LABEL
 ref=$MOLTENVK_REF
 commit=$ACTUAL_COMMIT
+madeira_ipad_cache_split=1
+madeira_ipad_cache_patch=$CACHE_PATCH_MARKER
 sdk=$SDK_PATH
 built_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
 echo "staged: $PREFIX/lib/libMoltenVK.a"
 echo "commit: $ACTUAL_COMMIT"
+echo "iPad cache split: $CACHE_PATCH_MARKER"
 echo "next: wire Wine winevulkan's unix side to this archive, then run the Vulkan probe before Detroit."
