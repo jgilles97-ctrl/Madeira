@@ -49,11 +49,11 @@ need_file "$FARM/vulkan-1.dll"
 need_file "$FARM/winevulkan.dll"
 
 # Bind physical PASS proof to the runtime that actually matters, not only to the
-# three Windows canaries. The ordered hash covers the staged MoltenVK archive,
-# the two app-facing Wine host archives, the two guest Vulkan DLLs, and the iOS
-# bridge/FEX/launcher source that sits outside those archives. The resulting ID
-# is embedded into the x64 controller executable. Madeira already fingerprints
-# that controller, so any runtime change invalidates old physical PASS proof.
+# Windows canaries. The ordered hash covers the staged MoltenVK archive, the two
+# app-facing Wine host archives, the two guest Vulkan DLLs, and the iOS bridge/
+# FEX/launcher source that sits outside those archives. The resulting ID is
+# embedded into the x64 controller executable. Madeira fingerprints that
+# controller, so any runtime change invalidates old physical PASS proof.
 RUNTIME_INPUTS=(
     "$ROOT/toolchains/moltenvk-detroit-ios/lib/libMoltenVK.a"
     "$ROOT/app/Madeira/libwin32u_unix.a"
@@ -97,6 +97,9 @@ TEST_BUNDLE_DIR="$FARM" \
 VULKAN_PROBE_OUT="$OUT_DIR/vulkan_probe.exe" \
     "$ROOT/tests/x64/build-vulkan-probe.sh"
 TEST_BUNDLE_DIR="$FARM" \
+VULKAN_COMPUTE_WRITEBACK_PROBE_OUT="$OUT_DIR/vulkan_compute_writeback_probe.exe" \
+    "$ROOT/tests/x64/build-vulkan-compute-writeback-probe.sh"
+TEST_BUNDLE_DIR="$FARM" \
 VULKAN_WSI_PROBE_OUT="$OUT_DIR/vulkan_wsi_probe.exe" \
     "$ROOT/tests/x64/build-vulkan-wsi-probe.sh"
 TEST_BUNDLE_DIR="$FARM" \
@@ -107,6 +110,7 @@ DETROIT_RUNTIME_BUILD_ID="$DETROIT_RUNTIME_BUILD_ID" \
 VULKAN_DEVICE_GATE_OUT="$OUT_DIR/vulkan-device-gate-x64.exe" \
     "$ROOT/tests/x64/build-vulkan-device-gate.sh"
 need_file "$FARM/vulkan_probe.exe"
+need_file "$FARM/vulkan_compute_writeback_probe.exe"
 need_file "$FARM/vulkan_wsi_probe.exe"
 need_file "$FARM/vulkan_swapchain_probe.exe"
 need_file "$FARM/vulkan-device-gate-x64.exe"
@@ -128,7 +132,7 @@ PASS: Detroit Vulkan runtime layers and on-device gate built.
 Runtime identity: $DETROIT_RUNTIME_BUILD_ID
 
 This is a build gate, not an iPad compatibility claim.
-The four fixed x64 test executables are now bundled with Madeira, and the gate
+The five fixed x64 test executables are now bundled with Madeira, and the gate
 itself is bound to the exact local graphics/runtime inputs above.
 
 On the physical M4 iPad, open Madeira and tap:
@@ -136,6 +140,8 @@ On the physical M4 iPad, open Madeira and tap:
   Detroit graphics test
 
 Keep Madeira in the foreground until the test finishes. A valid PASS requires:
+  DETROIT_CAPABILITIES=PASS
+  MOLTENVK_ARGUMENT_BUFFER_COMPUTE_INTEGRITY=PASS
   VULKAN_DEVICE=PASS
   WIN32_SURFACE=PASS
   PRESENTED_120_FRAMES=PASS
