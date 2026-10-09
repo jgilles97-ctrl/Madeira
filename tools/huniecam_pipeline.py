@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Run the HunieCam compatibility analysis pipeline without touching game files.
 
-Cycle 6 adds two important controls to the existing evidence-first pipeline:
-(1) an exact per-launch run identity that binds the structured session/run record
-to the actual Madeira/Unity log contents, and (2) a read-only PE import audit of
-the owned executable so Windows prerequisites come from evidence, not guesses.
+Cycle 6 seals one launch to its exact build/profile/session/log evidence, audits
+the owned EXE's PE imports, and automatically emits a device-observation form
+already linked to that run. The pipeline is analytical only: it never launches
+the game, edits the install, or changes the Madeira prefix.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import pathlib
 from typing import Any
 
 import huniecam_config_guard as config_guard
+import huniecam_device_evidence as device_evidence_tool
 import huniecam_evidence_contract as evidence_contract
 import huniecam_evidence_manifest as evidence_manifest
 import huniecam_failure_capsule as failure_capsule_tool
@@ -28,7 +29,7 @@ import huniecam_run_record as run_record_tool
 import huniecam_session_triage as session_triage
 import huniecam_storage_guard as storage_guard
 
-SCHEMA = "MADEIRA_HUNIECAM_PIPELINE_V4"
+SCHEMA = "MADEIRA_HUNIECAM_PIPELINE_V5"
 
 
 def read_text(path: pathlib.Path | None) -> str:
@@ -69,26 +70,14 @@ def run(
     perf = performance_tool.analyze(combined_text, expected_fps=fps)
     failure_capsule = failure_capsule_tool.extract(combined_text)
 
-    profile = {
-        "launch_mode": launch_mode,
-        "resolution": resolution,
-        "display": display,
-        "fps": fps,
-        "bits": bits,
-        "config": config_text.strip(),
-        "arguments": arguments.strip(),
-        "relative_executable": relative_executable,
-    }
+    profile = {"launch_mode": launch_mode, "resolution": resolution, "display": display, "fps": fps, "bits": bits, "config": config_text.strip(), "arguments": arguments.strip(), "relative_executable": relative_executable}
     record = run_record_tool.build(pre, session, profile, perf)
     run_context = run_context_tool.build(record, session, madeira_text, unity_text)
     pe_imports = pe_imports_tool.parse(install / "HunieCamStudio.exe")
-    contract = evidence_contract.validate(
-        pre, session, guard, perf, record,
-        run_context=run_context, pe_imports=pe_imports,
-    )
-    # Advice consumes the same validated evidence set that the run will retain.
+    contract = evidence_contract.validate(pre, session, guard, perf, record, run_context=run_context, pe_imports=pe_imports)
     nxt = next_run.choose(session, issues, ledger, guard, perf, contract)
     registry = registry_snapshot_tool.snapshot(registry_text) if registry_text else None
+    device_template = device_evidence_tool.template(run_context)
 
     paths = {
         "preflight": out_dir / "huniecam-preflight.json",
@@ -102,13 +91,9 @@ def run(
         "pe_imports": out_dir / "huniecam-pe-imports.json",
         "contract": out_dir / "huniecam-evidence-contract.json",
         "next": out_dir / "huniecam-next-run.json",
+        "device_template": out_dir / "huniecam-device-evidence-template.json",
     }
-    for key, value in (
-        ("preflight", pre), ("guard", guard), ("session", session),
-        ("issues", issues), ("performance", perf), ("failure_capsule", failure_capsule),
-        ("run_record", record), ("run_context", run_context), ("pe_imports", pe_imports),
-        ("contract", contract), ("next", nxt),
-    ):
+    for key, value in (("preflight", pre), ("guard", guard), ("session", session), ("issues", issues), ("performance", perf), ("failure_capsule", failure_capsule), ("run_record", record), ("run_context", run_context), ("pe_imports", pe_imports), ("contract", contract), ("next", nxt), ("device_template", device_template)):
         write_json(paths[key], value)
 
     registry_path = None
@@ -124,29 +109,18 @@ def run(
         write_json(storage_path, storage)
 
     manifest_inputs: dict[str, pathlib.Path | None] = {
-        "preflight": paths["preflight"],
-        "session": paths["session"],
-        "guard": paths["guard"],
-        "issues": paths["issues"],
-        "performance": paths["performance"],
-        "failure_capsule": paths["failure_capsule"],
-        "run_record": paths["run_record"],
-        "run_context": paths["run_context"],
-        "pe_imports": paths["pe_imports"],
-        "contract": paths["contract"],
-        "registry_snapshot": registry_path,
-        "madeira_log": madeira_log,
-        "unity_log": unity_log,
+        "preflight": paths["preflight"], "session": paths["session"], "guard": paths["guard"], "issues": paths["issues"],
+        "performance": paths["performance"], "failure_capsule": paths["failure_capsule"], "run_record": paths["run_record"],
+        "run_context": paths["run_context"], "pe_imports": paths["pe_imports"], "contract": paths["contract"],
+        "device_template": paths["device_template"], "registry_snapshot": registry_path, "madeira_log": madeira_log, "unity_log": unity_log,
     }
     manifest = evidence_manifest.build(manifest_inputs)
     manifest_path = out_dir / "huniecam-evidence-manifest.json"
     write_json(manifest_path, manifest)
 
     output_names = [p.name for p in paths.values()] + [manifest_path.name]
-    if registry_path:
-        output_names.append(registry_path.name)
-    if storage_path:
-        output_names.append(storage_path.name)
+    if registry_path: output_names.append(registry_path.name)
+    if storage_path: output_names.append(storage_path.name)
 
     categories = pe_imports.get("categories") if isinstance(pe_imports.get("categories"), dict) else {}
     summary = {
@@ -157,6 +131,7 @@ def run(
         "run_record_ready": record.get("ready_for_comparison"),
         "run_context_ready": run_context.get("ready"),
         "run_id_sha256": run_context.get("run_id_sha256"),
+        "device_template_linked": bool(device_template.get("run_id_sha256") and device_template.get("run_id_sha256") == run_context.get("run_id_sha256")),
         "owned_build_fingerprint": (record.get("build") or {}).get("fingerprint_sha256") if isinstance(record.get("build"), dict) else None,
         "deepest_stage": session.get("deepest_stage"),
         "deepest_stage_name": session.get("deepest_stage_name"),
@@ -173,8 +148,9 @@ def run(
         "next_run_profile": nxt.get("profile"),
         "storage_large_jit_dumps": storage.get("large_jit_dump_count") if storage else None,
         "evidence_manifest": manifest_path.name,
+        "device_evidence_template": paths["device_template"].name,
         "outputs": output_names,
-        "rule": "Do not run a guard-rejected profile, compare an invalid evidence set, or mix files across run IDs. Dependency changes require evidence from the owned PE import audit or an exact missing-DLL runtime error.",
+        "rule": "Do not run a guard-rejected profile, compare an invalid evidence set, mix files across run IDs, or reuse the generated device form for another launch. Dependency changes require owned-PE or exact runtime evidence.",
     }
     write_json(out_dir / "huniecam-pipeline-summary.json", summary)
     return summary
@@ -199,13 +175,7 @@ def main() -> int:
     p.add_argument("--out-dir", type=pathlib.Path, required=True)
     args = p.parse_args()
     ledger = json.loads(args.ledger.read_text(encoding="utf-8")) if args.ledger else None
-    summary = run(
-        args.install, args.madeira_log, args.unity_log, args.out_dir,
-        config_text=read_text(args.config), arguments=args.arguments,
-        ledger=ledger, storage_root=args.storage_root, registry_text=read_text(args.registry),
-        launch_mode=args.launch_mode, resolution=args.resolution, display=args.display,
-        fps=args.fps, bits=args.bits, relative_executable=args.relative_executable,
-    )
+    summary = run(args.install, args.madeira_log, args.unity_log, args.out_dir, config_text=read_text(args.config), arguments=args.arguments, ledger=ledger, storage_root=args.storage_root, registry_text=read_text(args.registry), launch_mode=args.launch_mode, resolution=args.resolution, display=args.display, fps=args.fps, bits=args.bits, relative_executable=args.relative_executable)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if summary["guard_status"] != "FAIL" and summary["evidence_contract_valid"] else 2
 
