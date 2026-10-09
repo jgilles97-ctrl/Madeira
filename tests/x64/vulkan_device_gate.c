@@ -5,6 +5,12 @@
  * the same Wine/FEX child-process path used by real Windows software on iOS.
  * It stops at the first failed or hung stage and prints a small, stable summary
  * that can be copied directly from madeira-log.txt.
+ *
+ * A durable proof file is deliberately written by THIS x86-64 Windows process,
+ * not by the iOS UI. The previous proof is deleted before any test runs, and a
+ * new proof appears only after all three child canaries return success. This
+ * lets Madeira distinguish "CI/build says it should work" from "this physical
+ * iPad actually completed the local FEX -> Wine -> Vulkan -> Metal gate".
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -13,12 +19,86 @@
 #include <string.h>
 
 #define GATE_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_V1"
+#define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V1"
+#define PROOF_PATH "C:\\madeira-detroit-vulkan-gate.txt"
+#define PROOF_TEMP_PATH "C:\\madeira-detroit-vulkan-gate.tmp"
 
 typedef struct gate_stage {
     const char *name;
     const char *exe;
     DWORD timeout_ms;
 } gate_stage;
+
+static void clear_stale_proof(void)
+{
+    /* A stale PASS is more dangerous than no proof. Ignore missing-file errors. */
+    DeleteFileA(PROOF_TEMP_PATH);
+    DeleteFileA(PROOF_PATH);
+}
+
+static int write_full_pass_proof(void)
+{
+    static const char proof[] =
+        "SCHEMA=" PROOF_SCHEMA "\r\n"
+        "ARCH=x86_64-windows\r\n"
+        "EXECUTION=physical-device-local\r\n"
+        "VULKAN_DEVICE=PASS\r\n"
+        "WIN32_SURFACE=PASS\r\n"
+        "PRESENTED_120_FRAMES=PASS\r\n"
+        "OVERALL=PASS\r\n"
+        "NEXT_GATE=detroit-process-and-shader-compilation\r\n";
+    HANDLE file;
+    DWORD written = 0;
+    BOOL ok;
+
+    DeleteFileA(PROOF_TEMP_PATH);
+    file = CreateFileA(PROOF_TEMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        printf("PROOF_RESULT=FAIL\n");
+        printf("PROOF_ERROR=CreateFileA:%lu\n", (unsigned long)GetLastError());
+        return 30;
+    }
+
+    ok = WriteFile(file, proof, (DWORD)(sizeof(proof) - 1u), &written, NULL);
+    if (!ok || written != (DWORD)(sizeof(proof) - 1u)) {
+        DWORD err = GetLastError();
+        CloseHandle(file);
+        DeleteFileA(PROOF_TEMP_PATH);
+        printf("PROOF_RESULT=FAIL\n");
+        printf("PROOF_ERROR=WriteFile:%lu:%lu/%lu\n",
+               (unsigned long)err,
+               (unsigned long)written,
+               (unsigned long)(sizeof(proof) - 1u));
+        return 31;
+    }
+
+    if (!FlushFileBuffers(file)) {
+        DWORD err = GetLastError();
+        CloseHandle(file);
+        DeleteFileA(PROOF_TEMP_PATH);
+        printf("PROOF_RESULT=FAIL\n");
+        printf("PROOF_ERROR=FlushFileBuffers:%lu\n", (unsigned long)err);
+        return 32;
+    }
+    CloseHandle(file);
+
+    /* Publish atomically only after the complete PASS payload is durable. */
+    if (!MoveFileExA(PROOF_TEMP_PATH, PROOF_PATH,
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DWORD err = GetLastError();
+        DeleteFileA(PROOF_TEMP_PATH);
+        printf("PROOF_RESULT=FAIL\n");
+        printf("PROOF_ERROR=MoveFileExA:%lu\n", (unsigned long)err);
+        return 33;
+    }
+
+    printf("PROOF_PATH=%s\n", PROOF_PATH);
+    printf("PROOF_SCHEMA=%s\n", PROOF_SCHEMA);
+    printf("PROOF_RESULT=PASS\n");
+    fflush(stdout);
+    return 0;
+}
 
 static int run_stage(const gate_stage *stage)
 {
@@ -97,9 +177,12 @@ int main(void)
     };
     size_t i;
 
+    clear_stale_proof();
+
     printf("SCHEMA=%s\n", GATE_SCHEMA);
     printf("ARCH=x86_64-windows\n");
     printf("PURPOSE=prove-local-FEX-Wine-Vulkan-MoltenVK-Metal-path-before-Detroit\n");
+    printf("STALE_PROOF_CLEARED=1\n");
     fflush(stdout);
 
     for (i = 0; i < sizeof(stages) / sizeof(stages[0]); ++i) {
@@ -110,6 +193,7 @@ int main(void)
             printf("FAILED_GATE=%s\n", stages[i].name);
             for (j = i + 1; j < sizeof(stages) / sizeof(stages[0]); ++j)
                 printf("GATE_RESULT=%s:SKIP\n", stages[j].name);
+            printf("PROOF_RESULT=NOT_WRITTEN\n");
             printf("NEXT_ACTION=fix-this-gate-before-launching-Detroit\n");
             fflush(stdout);
             return rc;
@@ -119,6 +203,21 @@ int main(void)
     printf("VULKAN_DEVICE=PASS\n");
     printf("WIN32_SURFACE=PASS\n");
     printf("PRESENTED_120_FRAMES=PASS\n");
+    fflush(stdout);
+
+    /* Proof publication is part of the gate. A test that rendered correctly but
+     * cannot persist its evidence does NOT advance the project automatically. */
+    {
+        int proof_rc = write_full_pass_proof();
+        if (proof_rc != 0) {
+            printf("OVERALL=FAIL\n");
+            printf("FAILED_GATE=proof-publication\n");
+            printf("NEXT_ACTION=fix-proof-publication-before-launching-Detroit\n");
+            fflush(stdout);
+            return proof_rc;
+        }
+    }
+
     printf("OVERALL=PASS\n");
     printf("NEXT_GATE=detroit-process-and-shader-compilation\n");
     fflush(stdout);
