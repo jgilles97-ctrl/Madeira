@@ -76,7 +76,7 @@ class HunieCamProbeTests(unittest.TestCase):
             self.assertEqual(report["route"]["minimum_graphics_reference"], "DirectX 9.0a compatible")
             self.assertEqual(report["route"]["max_builtin_widescreen_resolution_reference"], "1600x900")
             self.assertEqual(report["route"]["fps_baseline"], 60)
-            self.assertIn("registry", report["route"]["config_registry_path"].lower() if "registry" in report["route"]["config_registry_path"].lower() else "registry")
+            self.assertIn("Software\\HuniePot\\HunieCam Studio", report["route"]["config_registry_path"])
             self.assertEqual(report["route"]["official_steam_windows_launch"]["executable"], "HunieCamStudio.exe")
             self.assertEqual(report["route"]["official_steam_windows_launch"]["arguments"], "")
             self.assertIn("program folder", report["route"]["working_directory"])
@@ -140,7 +140,7 @@ class HunieCamProbeTests(unittest.TestCase):
             (root / "HunieCamStudio_Data" / "globalgamemanagers").write_bytes(b"Unity 5.6.7f1\x00")
             report = mod.probe_install(root)
             self.assertIn("5.6.7f1", report["runtime_signals"]["unity_versions_seen"])
-            self.assertTrue(any("public metadata" in w for w in report["warnings"]))
+            self.assertTrue(any("public metadata" in w.lower() for w in report["warnings"]))
 
 
 if __name__ == "__main__":
