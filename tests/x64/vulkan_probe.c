@@ -5,11 +5,15 @@
  * Windows Vulkan loader exactly the way a real game can, so a PASS proves
  * vulkan-1.dll is present and can reach Wine's Vulkan implementation.
  *
- * Detroit relies on VK_EXT_descriptor_indexing for its resource-array/bindless
- * renderer. This probe therefore treats that extension as a hard pre-game
- * capability: it must be advertised and successfully enabled on VkDevice.
- * Individual descriptor-indexing feature bits are printed for device evidence;
- * we do not invent stricter per-bit requirements without game evidence.
+ * Detroit's published PC requirements explicitly require Vulkan 1.1. Quantic
+ * Dream's renderer write-up also describes pervasive descriptor indexing and
+ * compute-shader/async-compute work. The physical pre-game gate therefore
+ * requires Vulkan 1.1, VK_EXT_descriptor_indexing, successful device creation
+ * with that extension enabled, and at least one compute-capable queue.
+ *
+ * We do not invent stricter requirements from architecture commentary. A
+ * dedicated compute queue, indirect-draw/core feature bits, descriptor limits,
+ * and VK_EXT_memory_budget are recorded as evidence only.
  *
  * VK_EXT_memory_budget is telemetry-only. MoltenVK supports it, but its iOS
  * semantics have had an open upstream discussion. We record budget, usage, and
@@ -26,7 +30,7 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 
-#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V3"
+#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V4"
 
 static int has_extension(const VkExtensionProperties *exts, uint32_t count,
                          const char *name)
@@ -74,11 +78,15 @@ int main(void)
     VkInstance instance = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     uint32_t loader_version = VK_API_VERSION_1_0;
+    uint32_t primary_api_version = VK_API_VERSION_1_0;
     uint32_t instance_ext_count = 0;
     uint32_t physical_count = 0;
     uint32_t queue_count = 0;
     uint32_t device_ext_count = 0;
     uint32_t graphics_queue = UINT32_MAX;
+    uint32_t compute_queue = UINT32_MAX;
+    uint32_t dedicated_compute_queue = UINT32_MAX;
+    uint32_t transfer_queue = UINT32_MAX;
     uint32_t i;
     int descriptor_indexing_available = 0;
     VkResult vr;
@@ -117,6 +125,10 @@ int main(void)
     printf("LOADER_API=");
     print_version(loader_version);
     printf("\n");
+    if (loader_version < VK_API_VERSION_1_1)
+        return fail(17, "detroit-capabilities",
+                    "Detroit's published PC requirements require Vulkan 1.1 or newer");
+    printf("DETROIT_VULKAN_1_1_LOADER=PASS\n");
 
     vr = enumerate_instance_extensions(NULL, &instance_ext_count, NULL);
     if (vr != VK_SUCCESS || !instance_ext_count)
@@ -155,12 +167,10 @@ int main(void)
         memset(&app_info, 0, sizeof(app_info));
         app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app_info.pApplicationName = "Madeira Detroit Vulkan Probe";
-        app_info.applicationVersion = VK_MAKE_VERSION(3, 0, 0);
+        app_info.applicationVersion = VK_MAKE_VERSION(4, 0, 0);
         app_info.pEngineName = "Madeira";
         app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-        app_info.apiVersion = loader_version >= VK_API_VERSION_1_1
-                                  ? VK_API_VERSION_1_1
-                                  : VK_API_VERSION_1_0;
+        app_info.apiVersion = VK_API_VERSION_1_1;
 
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
         if (has_extension(instance_exts, instance_ext_count,
@@ -182,7 +192,7 @@ int main(void)
         vr = create_instance(&create_info, NULL, &instance);
         if (vr != VK_SUCCESS || instance == VK_NULL_HANDLE) {
             char msg[128];
-            snprintf(msg, sizeof(msg), "vkCreateInstance failed (%d)", (int)vr);
+            snprintf(msg, sizeof(msg), "vkCreateInstance(Vulkan 1.1) failed (%d)", (int)vr);
             return fail(20, "create-instance", msg);
         }
     }
@@ -229,13 +239,30 @@ int main(void)
         VkPhysicalDeviceProperties props;
         memset(&props, 0, sizeof(props));
         get_physical_device_properties(physical_devices[i], &props);
+        if (i == 0) primary_api_version = props.apiVersion;
         printf("GPU_%u_NAME=%s\n", i, props.deviceName);
         printf("GPU_%u_VENDOR_ID=0x%04x\n", i, props.vendorID);
         printf("GPU_%u_DEVICE_ID=0x%04x\n", i, props.deviceID);
         printf("GPU_%u_API=", i);
         print_version(props.apiVersion);
         printf("\n");
+        if (i == 0) {
+            printf("LIMIT_MAX_PER_STAGE_SAMPLED_IMAGES=%u\n",
+                   props.limits.maxPerStageDescriptorSampledImages);
+            printf("LIMIT_MAX_DESCRIPTOR_SET_SAMPLED_IMAGES=%u\n",
+                   props.limits.maxDescriptorSetSampledImages);
+            printf("LIMIT_MAX_DESCRIPTOR_SET_STORAGE_BUFFERS=%u\n",
+                   props.limits.maxDescriptorSetStorageBuffers);
+            printf("LIMIT_MAX_COMPUTE_WORKGROUP_INVOCATIONS=%u\n",
+                   props.limits.maxComputeWorkGroupInvocations);
+            printf("LIMIT_MAX_DRAW_INDIRECT_COUNT=%u\n",
+                   props.limits.maxDrawIndirectCount);
+        }
     }
+    if (primary_api_version < VK_API_VERSION_1_1)
+        return fail(35, "detroit-capabilities",
+                    "the physical Vulkan device does not expose Detroit's required Vulkan 1.1 API");
+    printf("DETROIT_VULKAN_1_1_DEVICE=PASS\n");
 
     {
         VkPhysicalDeviceMemoryProperties mem;
@@ -261,13 +288,36 @@ int main(void)
     for (i = 0; i < queue_count; ++i) {
         printf("QUEUE_%u_FLAGS=0x%x\n", i, queues[i].queueFlags);
         printf("QUEUE_%u_COUNT=%u\n", i, queues[i].queueCount);
-        if (graphics_queue == UINT32_MAX && queues[i].queueCount &&
+        if (queues[i].queueCount && graphics_queue == UINT32_MAX &&
             (queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
             graphics_queue = i;
+        if (queues[i].queueCount && compute_queue == UINT32_MAX &&
+            (queues[i].queueFlags & VK_QUEUE_COMPUTE_BIT))
+            compute_queue = i;
+        if (queues[i].queueCount && dedicated_compute_queue == UINT32_MAX &&
+            (queues[i].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
+            !(queues[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+            dedicated_compute_queue = i;
+        if (queues[i].queueCount && transfer_queue == UINT32_MAX &&
+            (queues[i].queueFlags & VK_QUEUE_TRANSFER_BIT))
+            transfer_queue = i;
     }
     if (graphics_queue == UINT32_MAX)
         return fail(28, "queue-families", "no graphics-capable Vulkan queue exists");
     printf("GRAPHICS_QUEUE_FAMILY=%u\n", graphics_queue);
+    if (compute_queue == UINT32_MAX)
+        return fail(36, "detroit-capabilities",
+                    "Detroit uses compute shaders but no compute-capable Vulkan queue is available");
+    printf("COMPUTE_QUEUE_FAMILY=%u\n", compute_queue);
+    if (dedicated_compute_queue == UINT32_MAX)
+        printf("DEDICATED_COMPUTE_QUEUE_FAMILY=NONE\n");
+    else
+        printf("DEDICATED_COMPUTE_QUEUE_FAMILY=%u\n", dedicated_compute_queue);
+    if (transfer_queue == UINT32_MAX)
+        printf("TRANSFER_QUEUE_FAMILY=NONE\n");
+    else
+        printf("TRANSFER_QUEUE_FAMILY=%u\n", transfer_queue);
+    printf("DETROIT_COMPUTE_QUEUE=PASS\n");
 
     vr = enumerate_device_extensions(physical_devices[0], NULL, &device_ext_count, NULL);
     if (vr != VK_SUCCESS)
@@ -348,6 +398,10 @@ int main(void)
         descriptor_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
         features2.pNext = &descriptor_features;
         get_physical_device_features2(physical_devices[0], &features2);
+        printf("CORE_FEATURE_MULTI_DRAW_INDIRECT=%u\n", features2.features.multiDrawIndirect);
+        printf("CORE_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE=%u\n",
+               features2.features.drawIndirectFirstInstance);
+        printf("CORE_FEATURE_SHADER_INT64=%u\n", features2.features.shaderInt64);
         printf("DESCRIPTOR_INDEXING_SHADER_UNIFORM_BUFFER_NONUNIFORM=%u\n",
                descriptor_features.shaderUniformBufferArrayNonUniformIndexing);
         printf("DESCRIPTOR_INDEXING_SHADER_SAMPLED_IMAGE_NONUNIFORM=%u\n",
@@ -418,6 +472,7 @@ int main(void)
     free(instance_exts);
     FreeLibrary(loader);
 
+    printf("DETROIT_CAPABILITIES=PASS\n");
     printf("RESULT=PASS\n");
     printf("NEXT_GATE=win32-surface-and-swapchain\n");
     return 0;
