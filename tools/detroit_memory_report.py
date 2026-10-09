@@ -20,7 +20,11 @@ MEMORY_RE = re.compile(
     re.I,
 )
 SHADER_RE = re.compile(r"(?:compil(?:e|ing)\s+shaders?|shaders?.*?compil).*?(?P<pct>\d{1,3})\s*%", re.I)
-PRESSURE_RE = re.compile(r"jetsam|memorystatus|out of memory|STATUS_NO_MEMORY|c0000017", re.I)
+PRESSURE_RE = re.compile(
+    r"(?:jetsam|memorystatus|out of memory|STATUS_NO_MEMORY|c0000017|"
+    r"VK_ERROR_OUT_OF_(?:DEVICE|HOST)_MEMORY|kIOGPUCommandBufferCallbackErrorOutOfMemory)",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,11 @@ def at_or_before(samples: list[Sample], line: int) -> Sample | None:
     return found
 
 
+def shader_progress_at_or_before(progress: list[tuple[int, int]], line: int) -> int | None:
+    values = [pct for progress_line, pct in progress if progress_line <= line]
+    return max(values) if values else None
+
+
 def render(text: str) -> str:
     samples, progress, pressure = parse(text)
     out = ["# Detroit shader-memory report", ""]
@@ -93,8 +102,6 @@ def render(text: str) -> str:
     if progress:
         out += ["", "Shader checkpoints:"]
         seen: set[int] = set()
-        # Prefer the checkpoints that matter most for the known late Detroit
-        # shader-memory failure, while still reporting any other observed max.
         wanted = [50, 90, 95, 98, 99, 100]
         for target in wanted:
             candidates = [(line, pct) for line, pct in progress if pct >= target]
@@ -119,7 +126,15 @@ def render(text: str) -> str:
 
     out += ["", "Interpretation:"]
     if pressure:
+        first_pressure = pressure[0]
+        pressure_progress = shader_progress_at_or_before(progress, first_pressure)
         out.append("BLOCKED: the log contains an explicit memory-pressure/out-of-memory signature. Preserve this log and compare the headroom immediately before it.")
+        if pressure_progress is not None and pressure_progress >= 98:
+            out.append(
+                "Late shader-cache pattern: memory pressure appeared after shader progress had reached at least 98%. "
+                "That matches the known Detroit late pipeline-cache/save danger zone. Keep shader compression enabled, "
+                "keep the MSL library cache disabled for the 8 GB baseline, and compare the last memory samples before the failure."
+            )
     else:
         out.append("No explicit memory-pressure signature was found. Treat the measured headroom trend as evidence, not as a fixed universal safety limit.")
     return "\n".join(out)
