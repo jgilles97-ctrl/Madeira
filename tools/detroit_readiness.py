@@ -120,7 +120,8 @@ def audit(
     else:
         checks.append(Check("game_exe", "INFO", "Game directory was not supplied"))
 
-    # GraphicOptions.JSON: Detroit's MoltenVK path has a known depth-of-field problem.
+    # GraphicOptions.JSON: Detroit's current MoltenVK compatibility path has a
+    # known depth-of-field rendering problem.
     if graphics_options is None:
         graphics_options = _find_first(game_dir, ("GraphicOptions.JSON",)) if game_dir else None
     if graphics_options and graphics_options.exists():
@@ -172,8 +173,8 @@ def audit(
     else:
         checks.append(Check("shader_cache", "INFO", "Shader cache was not supplied/found"))
 
-    # Environment / launcher configuration. For the first 8 GB iPad pass, peak
-    # memory is more important than the fastest possible shader compilation.
+    # Environment / launcher configuration. The first 8 GB iPad pass optimizes
+    # for measured peak memory, not desktop assumptions.
     env_text = _read(env_file)
     if env_file:
         if not env_text:
@@ -186,7 +187,7 @@ def audit(
                         "shader_compression",
                         "PASS",
                         "Detroit shader compression uses the known-good algorithm",
-                        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3",
+                        "algorithm 3 is LZ4; MoltenVK documents shader-source compression as a way to reduce large retained MSL-source memory",
                     )
                 )
             elif compression is not None:
@@ -195,7 +196,7 @@ def audit(
                         "shader_compression",
                         "WARN",
                         "Detroit shader compression differs from the tested Apple-Silicon setting",
-                        f"value={compression}; first iPad profile uses 3",
+                        f"value={compression}; the first iPad profile uses 3 (LZ4)",
                     )
                 )
             else:
@@ -204,36 +205,21 @@ def audit(
                         "shader_compression",
                         "WARN",
                         "MoltenVK shader compression is not visible in the supplied config",
-                        "Successful full-game Apple-Silicon runs required algorithm 3.",
+                        "Successful full-game Apple-Silicon Detroit runs used algorithm 3, and MoltenVK documents shader-source retention as potentially significant memory use.",
                     )
                 )
 
+            # The Detroit macOS recipe sets this to 1, but current MoltenVK
+            # explicitly documents this setting as having no effect on iOS or
+            # tvOS. Never count 0 as an iPad memory optimization.
             concurrent = _config_value(env_text, "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION")
-            if concurrent == "0":
+            if concurrent is not None:
                 checks.append(
                     Check(
-                        "concurrent_compilation",
-                        "PASS",
-                        "Memory-first shader compilation is enabled",
-                        "value=0; benchmark value=1 only after the 8 GB iPad finishes the shader gate without memory pressure",
-                    )
-                )
-            elif concurrent == "1":
-                checks.append(
-                    Check(
-                        "concurrent_compilation",
-                        "WARN",
-                        "Maximum concurrent shader compilation is enabled",
-                        "Release003 recommends this on a 64 GB Mac, but it can increase peak RAM. Start with 0 on the 8 GB iPad.",
-                    )
-                )
-            else:
-                checks.append(
-                    Check(
-                        "concurrent_compilation",
-                        "WARN",
-                        "Shader compilation concurrency is not pinned for the 8 GB profile",
-                        "Set MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=0 for the first device shader pass.",
+                        "concurrent_compilation_ios_noop",
+                        "INFO",
+                        "Concurrent-compilation setting is ignored on iOS",
+                        f"value={concurrent}; MoltenVK documents this switch as macOS-only, so it is not an iPad memory or speed lever",
                     )
                 )
 
@@ -244,7 +230,7 @@ def audit(
                         "dtr_msl_library_cache",
                         "PASS",
                         "Release003 custom process-wide Metal library cache is disabled",
-                        "memory-first 8 GB baseline; re-enable only after device measurements",
+                        "memory-first 8 GB baseline; re-enable only after device measurements show the retained libraries fit comfortably",
                     )
                 )
             elif msl_cache == "1":
@@ -253,7 +239,7 @@ def audit(
                         "dtr_msl_library_cache",
                         "WARN",
                         "Release003 custom Metal library cache is enabled",
-                        "The Detroit fork keeps compiled MTLLibrary objects in a process-wide map for the process lifetime. This is high-risk on an 8 GB iPad.",
+                        "The Detroit fork keeps compiled MTLLibrary objects in a process-wide map for the process lifetime. This is high-risk until measured on an 8 GB iPad.",
                     )
                 )
             else:
@@ -272,8 +258,8 @@ def audit(
                     Check(
                         "device_stats",
                         "PASS",
-                        "Madeira device-state diagnostics are enabled",
-                        "thermal state and Low Power Mode will be recorded during the long shader test",
+                        "Madeira device diagnostics are enabled",
+                        "the long shader test will record current app memory headroom, current/peak footprint, thermal state, and Low Power Mode",
                     )
                 )
             else:
@@ -281,16 +267,45 @@ def audit(
                     Check(
                         "device_stats",
                         "INFO",
-                        "Madeira device-state diagnostics are not enabled",
+                        "Madeira device diagnostics are not enabled",
                         "MADEIRA_DEVICE_STATS=1 is recommended for the first long Detroit shader run.",
                     )
                 )
     else:
         checks.append(Check("env_file", "INFO", "No Madeira/MoltenVK environment file supplied"))
 
-    # Runtime log signatures.
+    # Runtime log signatures. Order keeps lower-level loader/driver failures
+    # visible before Detroit-specific shader errors.
     log_text = _read(log_file)
     known_log_rules: tuple[tuple[str, str, str, re.Pattern[str], str], ...] = (
+        (
+            "guest_vulkan_loader_missing",
+            "FAIL",
+            "Windows Vulkan loader is missing or failed to load",
+            re.compile(r"(?:vulkan-1\.dll.{0,120}(?:not found|failed|cannot|c0000135)|(?:not found|failed|cannot|c0000135).{0,120}vulkan-1\.dll)", re.I),
+            "Rebuild the Detroit Vulkan payload and verify ARM64EC vulkan-1.dll is in Madeira's DLL farm before changing MoltenVK.",
+        ),
+        (
+            "guest_winevulkan_missing",
+            "FAIL",
+            "Wine Vulkan ICD is missing or failed to load",
+            re.compile(r"(?:winevulkan(?:\.dll|\.so)?.{0,120}(?:not found|failed|cannot|c0000135)|(?:not found|failed|cannot|c0000135).{0,120}winevulkan(?:\.dll|\.so)?)", re.I),
+            "Verify both ARM64EC winevulkan.dll and the compiled one-process winevulkan unix-call table.",
+        ),
+        (
+            "wine_vulkan_driver_unavailable",
+            "FAIL",
+            "Wine could not obtain a Vulkan graphics driver",
+            re.compile(r"Failed to load Wine graphics driver supporting Vulkan|pVulkanInit.{0,120}(?:not implemented|failed)|STATUS_NOT_IMPLEMENTED.{0,120}Vulkan", re.I),
+            "Check the strong iOS pVulkanInit wiring and the win32u static MoltenVK driver before debugging Detroit.",
+        ),
+        (
+            "ios_vulkan_surface_bridge_missing",
+            "FAIL",
+            "Madeira could not reach its HWND-to-Metal surface bridge",
+            re.compile(r"\[madeira-vulkan\].{0,160}(?:display shim exports unavailable|WSI acquire failed|no Metal)", re.I),
+            "Verify IOSDisplayShim exports and the per-window Metal-layer lifetime bridge before launching Detroit.",
+        ),
         (
             "mvk_init_failure",
             "FAIL",
@@ -331,14 +346,14 @@ def audit(
             "WARN",
             "Shader compilation appears to have reached the historical 98% danger point",
             re.compile(r"(?:compil(?:e|ing) shaders?.{0,80}98%|98%.{0,80}shader)", re.I),
-            "If the process dies here, inspect peak memory/cache finalization before changing unrelated CPU translation code.",
+            "If the process dies here, inspect measured app-memory headroom and cache finalization before changing unrelated CPU translation code.",
         ),
         (
             "memory_pressure",
             "FAIL",
             "Possible memory-pressure / jetsam failure detected",
             re.compile(r"jetsam|memorystatus|out of memory|STATUS_NO_MEMORY|c0000017", re.I),
-            "Record Memory+ state, peak footprint, cache size, compression setting, and concurrency setting.",
+            "Preserve the log and run tools/detroit_memory_report.py; compare app headroom/footprint near the failure with shader progress, cache size, compression, and Memory+ state.",
         ),
     )
 
@@ -370,6 +385,7 @@ def audit(
             "This is a readiness/triage tool, not proof that Detroit is compatible with the device.",
             "It never modifies or deletes the game, cache, configuration, or log files.",
             "The 8 GB memory profile is a conservative first-test baseline, not a claim that faster settings are impossible.",
+            "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION is not counted as an iPad optimization because MoltenVK documents it as ineffective on iOS/tvOS.",
         ],
     }
 
