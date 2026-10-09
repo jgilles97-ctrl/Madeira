@@ -14,9 +14,9 @@ First playable milestone:
 - audio, controller/touch input, saves, and cutscenes working
 - no remote PC or cloud rendering
 
-The official Windows minimum target for Detroit is already 720p / Low / 30 FPS, so that is the correct first performance gate rather than chasing desktop Ultra settings.
+The Windows minimum target for Detroit is already 720p / Low / 30 FPS, so that is the correct first performance gate rather than chasing desktop Ultra settings.
 
-## Architecture correction
+## Architecture
 
 Detroit's PC renderer is Vulkan. It is **not** primarily a D3D11 or D3D12 title, so DXMT and `madeira-d3d12` are not the main graphics path for this game.
 
@@ -32,43 +32,76 @@ FEX + Wine ARM64EC
 Wine vulkan-1.dll / winevulkan
         |
         v
+Madeira iOS Wine Vulkan driver
+        |
+        v
 MoltenVK-Detroit (Vulkan -> Metal)
         |
         v
-Metal on Apple M4 GPU
+CAMetalLayer / Metal on Apple M4 GPU
 ```
 
 CPU translation, Windows compatibility, Vulkan translation, Metal rendering, audio, input, saves, and execution all remain on the iPad.
 
-## Why the target is now substantially more credible
+## What is implemented now
 
-During 2026, contributors working in KhronosGroup/MoltenVK issue #2054 got the full game running on Apple Silicon with a Detroit-specific MoltenVK branch. The important fixes include:
+The repository now has a reproducible local Vulkan route instead of only a design document:
 
-- argument-buffer/SPIRV-Cross fixes needed by Detroit's descriptor-heavy shaders;
-- draw-ID handling fixes;
-- workarounds for Detroit pipelines that ask for blending on `R32Uint` attachments;
-- workarounds for shader/attachment type mismatches;
-- a fix for a later `On The Run` shader-interface failure;
-- shader-cache memory handling;
-- a persistent Metal shader-library cache;
-- a fullscreen/window transition fix.
+- Wine's win32u Vulkan core can be enabled for the jailed-iOS build.
+- MoltenVK is statically linked; the route does not depend on loading a desktop Vulkan dylib at runtime.
+- Wine's guest `VK_KHR_win32_surface` request is translated to `VK_EXT_metal_surface`.
+- The existing Madeira HWND -> `CAMetalLayer` bridge is reused rather than creating a second display system.
+- Wine's `winevulkan` unix-call table is registered in Madeira's one-process runtime.
+- ARM64EC `vulkan-1.dll` and `winevulkan.dll` are built reproducibly.
+- Three x86-64 Windows canaries cover Vulkan device creation, Win32 presentation support, and 120 actual swapchain clear/present frames.
+- A fourth x86-64 Windows program runs those canaries in order through the same Wine/FEX child-process path used by real Windows software.
+- CI cross-compiles and validates all four Windows programs and also compiles iPhoneOS-side surface/memory canaries.
 
-`DiAvisoo/MoltenVK-Detroit` Release003 is the latest published Detroit-specific release found during the 2026-10-09 audit. It is a **reference implementation, not yet an iPad proof**. Its source still supports an iOS build target, which makes it a much better starting point than re-creating the Detroit compatibility patches from scratch.
+**None of that is a physical-iPad PASS yet.** The next proof must come from the real M4 iPad.
+
+## MoltenVK-Detroit audit
+
+Madeira currently uses `DiAvisoo/MoltenVK-Detroit` Release003 as the Detroit compatibility baseline. The default build is pinned to the immutable Release003 commit:
+
+```text
+8b511fdc5351a37c305bc246e161796ddca56b18
+```
+
+A different source revision requires an explicit `MOLTENVK_DETROIT_REF` override. That makes a future fork upgrade deliberate and reviewable instead of allowing a moved tag to silently change our renderer.
+
+Important platform distinction: Release003's well-known fullscreen/window transition work is largely **macOS-specific** (`NSWindow` / `NSView`). It should not be counted as an iOS windowing fix. Madeira's own iOS Wine Vulkan driver and `CAMetalLayer` bridge are therefore still essential.
+
+The fork's Detroit Metal-library cache is not macOS-only. Its shader code reads:
+
+```text
+MVK_DTR_MSL_LIBRARY_CACHE
+```
+
+and defaults that switch to enabled. When it is set to `0`, the fork bypasses both its process-wide Metal-library cache and its persistent disk-cache path and compiles the Metal library directly. That is why the first 8 GB iPad profile starts with:
+
+```text
+MVK_DTR_MSL_LIBRARY_CACHE=0
+```
+
+This is intentionally a **memory-first** choice. We can re-enable the cache only after real device measurements show that the retained Metal libraries fit comfortably.
+
+Release003 also ships a Mac-side `compile_msl_library_cache.sh` helper for turning dumped Metal source into `.metallib` files. That helper uses the Xcode Metal command-line tool and is not an on-device iPad solution by itself.
 
 ## The 8 GB problem
 
-The M4 GPU and CPU share the same physical memory. Detroit's Windows minimum calls for 8 GB system RAM plus a discrete GPU with its own VRAM. An 8 GB iPad therefore has less memory headroom than the minimum PC layout even though the M4 is much newer and faster.
+The M4 GPU and CPU share the same physical memory. Detroit's Windows minimum assumes system RAM plus a discrete GPU with separate video memory. An 8 GB iPad therefore has less memory headroom than that PC layout even though the M4 is much newer and faster.
 
 That does **not** prove the port is impossible, but it makes memory the primary project risk.
 
 Known relevant evidence:
 
-- the full PC game used to stall around 98% during shader processing because saving the compiled pipeline data caused a large memory spike;
-- `MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM` was required by successful Apple-Silicon runs;
-- Release003 defaults to a persistent Metal shader cache that can consume roughly 3 GB of storage;
-- Madeira's Memory+ / increased-memory-limit entitlement is therefore a hard prerequisite for serious testing.
+- Detroit's large shader-compilation workload has historically produced very high memory pressure in the Apple-Silicon compatibility work.
+- successful Apple-Silicon work uses `MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3`;
+- Release003's persistent Metal cache can consume roughly 3 GB of **disk** storage after compilation;
+- its in-process cache retains `MTLLibrary` objects, which is the more important risk for an 8 GB iPad;
+- Madeira therefore records app footprint/peak footprint and device pressure during serious tests.
 
-For the iPad build, cache design must optimize **peak RAM first**, then launch time. A slower first launch is acceptable if it avoids a jetsam/out-of-memory kill.
+For the iPad build, optimize **peak RAM first**, then launch time. A slower first launch is acceptable if it avoids an iPadOS out-of-memory kill.
 
 ## Detroit profile: conservative first boot
 
@@ -81,24 +114,22 @@ Frame target:     30 FPS
 Depth of field:   Off
 HDR:              Off
 High-res mode:    Off
-Shader cache:     compressed
-Metal cache:      optional until memory/IO measurements are known
+Shader source:    LZ4 compression enabled
+Detroit MSL cache: disabled for the first memory baseline
+Device stats:     enabled
 ```
 
-The desktop Detroit fork recommends:
+The project profile is `docs/detroit-m4-8gb.cfg`.
 
-```text
-MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3
-MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=1
-```
-
-For an 8 GB iPad, **do not automatically assume maximum concurrent compilation is optimal**. More simultaneous compiler work can increase peak memory. Our iPad tuning matrix must test concurrency off/on and record peak footprint, completion time, and whether iPadOS kills the process.
+The desktop Detroit fork recommends `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=1`, but current MoltenVK documents that switch as having **no effect on iOS or tvOS**. Do not count it as an iPad memory/performance lever.
 
 ## Implementation gates
 
-Do not skip ahead. Each gate must leave a log artifact that says what passed or failed.
+Do not skip ahead. A physical-device gate is green only with evidence from the real iPad. Build/CI success is useful evidence that enables a gate, but it is not a substitute for device execution.
 
 ### Gate V0 — MoltenVK device build
+
+**Build plumbing implemented. Physical link/runtime proof still belongs to the later device gate.**
 
 Run:
 
@@ -106,80 +137,114 @@ Run:
 build/moltenvk-ios/build.sh
 ```
 
-Expected result:
+Expected output:
 
 ```text
 toolchains/moltenvk-detroit-ios/lib/libMoltenVK.a
 ```
 
-The build is pinned to the Detroit Release003 source by default and uses that source tree's own dependency resolver so the required SPIRV-Cross revision is not accidentally replaced.
+The default source is the audited Release003 commit, and the fork's own dependency resolver is used so its matching SPIRV-Cross revision is not accidentally replaced.
 
-### Gate V1 — Wine Vulkan unix side
+### Gate V1 — Wine Vulkan integration
 
-Madeira's Wine tree already contains `dlls/winevulkan`. The missing Madeira work is to compile/register its unix side in the same one-process iOS model used by the other Wine unix libraries.
+**Build/contract plumbing implemented.**
 
-Acceptance:
+Acceptance already enforced by repository tests includes:
 
-- `winevulkan.dll` loads;
-- its unix-call table is registered inside Madeira;
-- the host Vulkan functions resolve to the linked MoltenVK library;
-- no `dlopen` dependency on an unavailable macOS dylib exists on device.
+- Wine win32u Vulkan is built instead of compiled out;
+- `pVulkanInit` is a strong static-link reference;
+- `winevulkan` unix calls are registered in Madeira;
+- host Vulkan entry points resolve to statically linked MoltenVK;
+- ARM64EC guest Vulkan DLLs are produced;
+- no desktop `dlopen` Vulkan dependency is required by the jailed-iOS path.
 
-### Gate V2 — headless Vulkan probe
+### Gate V2 — Vulkan device on the physical iPad
 
-Before launching Detroit, run a tiny Windows x64 probe through the exact FEX/Wine path. It must:
+The first x64 canary must run through Madeira/FEX/Wine and:
 
 1. load `vulkan-1.dll`;
 2. create a Vulkan instance;
-3. enumerate the M4 GPU through MoltenVK;
-4. print Vulkan version, memory heaps, queue families, descriptor-indexing support, subgroup support, and required portability features;
-5. create and destroy a logical device cleanly.
+3. enumerate the Apple GPU through MoltenVK;
+4. create and destroy a logical device cleanly.
 
-This separates CPU/Wine/Vulkan-loader failures from Detroit-specific shader problems.
+### Gate V3 — Windows surface and 120 presented frames
 
-### Gate V3 — presentation probe
+The next two x64 canaries must:
 
-Create a Win32 window and Vulkan swapchain through Madeira and display a clear frame on the iPad. Then render a triangle for several minutes while recording memory and frame timing.
+1. create a real Win32 window;
+2. create `VK_KHR_win32_surface` from the Windows side;
+3. reach Madeira's iOS bridge and `VkMetalSurfaceEXT`;
+4. find a presentation-capable queue;
+5. create a swapchain;
+6. clear/present **120 consecutive frames**;
+7. exit cleanly.
+
+The one-command controller runs V2 and V3 in the required order:
+
+```text
+MADEIRA_EXE=vulkan-device-gate-x64.exe
+```
+
+Do not launch Detroit as the next debugging step unless the log ends with:
+
+```text
+VULKAN_DEVICE=PASS
+WIN32_SURFACE=PASS
+PRESENTED_120_FRAMES=PASS
+OVERALL=PASS
+NEXT_GATE=detroit-process-and-shader-compilation
+```
+
+A failure stops the sequence immediately and marks later stages as skipped, so the first broken layer stays obvious.
 
 ### Gate V4 — Detroit process start
 
-The game must reach its first shader-compilation screen without a Wine loader failure, access violation, or missing Vulkan function.
+Only after the physical Vulkan gate is green, launch the user's legitimately owned Detroit installation. The game must reach its first shader-processing stage without a Wine loader failure, access violation, missing Vulkan function, or immediate Metal/Vulkan failure.
 
-### Gate V5 — shader compilation
+### Gate V5 — shader compilation on 8 GB
 
-Measure at least:
+Record at least:
 
-- starting footprint;
+- starting app footprint;
 - peak footprint;
-- footprint at 50%, 90%, 98%, and completion;
+- footprint at meaningful shader-progress checkpoints;
+- available system memory/headroom;
 - cache size;
 - time to completion;
 - iPad thermal state;
-- whether Memory+ is active;
 - compression setting;
-- concurrent compilation setting.
+- whether the Detroit Metal-library cache is enabled.
 
-If the process dies near 98%, treat memory/cache finalization as the first suspect before changing unrelated FEX or Wine code.
+First baseline:
+
+```text
+MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3
+MVK_DTR_MSL_LIBRARY_CACHE=0
+```
+
+If shader processing dies under memory pressure, treat memory/cache behavior as the first suspect before changing unrelated FEX or Wine code.
 
 ### Gate V6 — menu and first scene
 
-Reach Chloe/menu, then the opening hostage mission. Known historical failure signatures that should be classified automatically include:
+Reach Chloe/menu, then the opening hostage mission. Automatically classify known historical Detroit/MoltenVK signatures where possible, including:
 
-- `MVKCmdBindGraphicsPipeline` crashes;
-- blending enabled on `MTLPixelFormatR32Uint`;
+- graphics-pipeline binding crashes;
+- blending on `R32Uint` attachments;
 - missing vertex descriptor attributes;
-- missing `spvDrawIndex` binding;
+- missing draw-index binding;
 - float shader output targeting `R32Uint`;
 - shader-interface mismatch such as `user(locn10)`;
-- Metal/ShaderCache recompilation loops.
+- repeated shader recompilation/cache loops.
+
+Do not silently patch `DetroitBecomeHuman.exe`. Third-party Mac guides include an executable hex workaround for a blur effect; that is not part of Madeira's default compatibility path. Prefer runtime/configuration fixes and keep the user's original game binaries untouched.
 
 ### Gate V7 — 30-minute stability
 
-Play for 30 continuous minutes at 720p Low/30. No crash, jetsam kill, corrupted rendering, runaway cache growth, or audio/input loss.
+Play for 30 continuous minutes at 720p Low/30. No crash, iPadOS memory-pressure kill, corrupted rendering, runaway cache growth, or audio/input loss.
 
 ### Gate V8 — chapter coverage
 
-The first mission is not enough. Use several scenes with different rendering workloads. Include `On The Run`, because that scene exposed a later shader-interface bug in earlier Detroit/MoltenVK work.
+The first mission is not enough. Use several scenes with different rendering workloads. Include `On The Run`, because that scene exposed a later shader-interface problem in earlier Detroit/MoltenVK work.
 
 ### Gate V9 — save/resume
 
@@ -195,35 +260,41 @@ Do not delete shader caches automatically on every launch. Destructive cleanup h
 
 Use this order:
 
-1. preserve a known-good cache;
-2. validate cache version/build identity;
-3. quarantine only a cache proven incompatible;
-4. regenerate once;
-5. prefer bounded/persistent cache storage;
-6. expose a manual "Rebuild Detroit shader cache" action with a warning.
+1. establish the first low-memory baseline with the Detroit MSL library cache disabled;
+2. preserve known-good game/runtime caches;
+3. validate cache version/build identity;
+4. quarantine only a cache proven incompatible;
+5. regenerate only when required;
+6. test the Metal-library cache as a separate optimization after memory is known safe;
+7. expose destructive rebuild actions explicitly rather than doing them silently.
 
-The desktop Release003 cache compiler is useful research, but its shell/Xcode workflow cannot simply run inside a normal iPad app. For iPad, we need one of these routes:
-
-- generate compatible Metal libraries during a trusted Mac-side build step and package/copy them legally for the user's own game/runtime; or
-- compile/cache on device using public Metal APIs without external command-line tools.
-
-The second route is the cleaner long-term product architecture if performance and memory allow it.
+A future persistent-cache design must stay within the iPad app sandbox and use public Apple APIs. The Release003 Mac helper is useful research, not an on-device deployment mechanism.
 
 ## Game-file policy
 
-Do not commit or redistribute Detroit game files, Steam authentication material, copyrighted shader caches extracted from the game, or patched executables. Madeira should contain only compatibility code, tooling, tests, and instructions. The user supplies a legitimately owned game installation.
+Do not commit or redistribute Detroit game files, Steam authentication material, copyrighted game caches, or patched game executables. Madeira contains compatibility code, tooling, tests, and instructions. The user supplies a legitimately owned game installation.
 
 ## Current blockers, in priority order
 
-1. **Wine Vulkan integration in Madeira's one-process iOS runtime.**
-2. **MoltenVK-Detroit iOS build and link validation.**
-3. **A Vulkan probe proving the bridge before the game is involved.**
-4. **Peak-memory control during Detroit shader compilation on 8 GB.**
-5. **Persistent shader-library cache strategy appropriate for iPad.**
-6. **Scene-by-scene graphics correctness.**
-7. **Performance tuning to stable 720p/30.**
-8. **Touch-first controls after the core runtime is stable.**
+1. **Run the one-command Vulkan gate on the physical M4 iPad.** This is the first remaining proof that CI cannot supply.
+2. **Launch Detroit through the now-proven graphics path.**
+3. **Keep shader compilation alive within the 8 GB memory limit.**
+4. **Measure whether Release003's Metal-library cache can be safely re-enabled.**
+5. **Fix any Detroit-specific shader/rendering failures that remain on iOS.**
+6. **Add/verify audio, saves, controller, mouse/keyboard, then touch-first input.**
+7. **Reach stable 720p/30 and 30-minute stability.**
+8. **Qualify multiple chapters and eventually a full-game run.**
 
 ## Definition of progress
 
-A document or successful Mac run is not counted as an iPad-port milestone. A gate is green only when it has evidence from the real iPad or a deterministic build/test artifact that directly enables that gate.
+A document, Mac/CrossOver result, successful cross-build, or green CI run is not counted as "Detroit runs on iPad." The next major milestone is specifically:
+
+```text
+real M4 iPad
+  -> x64 Windows gate starts through FEX/Wine
+  -> Vulkan device PASS
+  -> Windows-to-Metal surface PASS
+  -> 120 consecutive presented frames PASS
+```
+
+Only then does the project advance to Detroit process start and shader compilation.
