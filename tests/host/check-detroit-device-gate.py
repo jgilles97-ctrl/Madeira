@@ -4,8 +4,10 @@
 This does not pretend to execute an iPad. It protects the properties that make
 our eventual physical-device result meaningful: the controller itself is an
 x64 Windows program, runs all three canaries through Wine/FEX in a strict order,
-has finite timeouts, stops on the first failure, and only reports success after
-the 120-frame presentation stage succeeds.
+has finite timeouts, stops on the first failure, only reports success after the
+120-frame presentation stage succeeds, and the iPad app exposes a deliberately
+narrow one-tap route to that fixed diagnostic without becoming an arbitrary EXE
+launcher.
 """
 
 from pathlib import Path
@@ -15,6 +17,8 @@ GATE = ROOT / "tests/x64/vulkan_device_gate.c"
 BUILDER = ROOT / "tests/x64/build-vulkan-device-gate.sh"
 SWAPCHAIN_PROBE = ROOT / "tests/x64/vulkan_swapchain_probe.c"
 ORCHESTRATOR = ROOT / "build/detroit-vulkan/build.sh"
+APP = ROOT / "app/Madeira/MadeiraApp.swift"
+SHORTCUTS = ROOT / "app/Madeira/SavesAndShortcuts.swift"
 
 
 def require(text: str, needle: str, label: str) -> None:
@@ -38,6 +42,8 @@ def main() -> None:
     builder = BUILDER.read_text()
     swapchain = SWAPCHAIN_PROBE.read_text()
     orchestrator = ORCHESTRATOR.read_text()
+    app = APP.read_text()
+    shortcuts = SHORTCUTS.read_text()
 
     require(gate, '"vulkan_probe.exe"', "headless Vulkan canary")
     require(gate, '"vulkan_wsi_probe.exe"', "Win32-surface canary")
@@ -87,16 +93,44 @@ def main() -> None:
 
     # The normal Detroit Vulkan build must package the controller and all three
     # children into Madeira's Windows DLL/executable farm.
-    for exe in (
+    payload_names = (
         "vulkan_probe.exe",
         "vulkan_wsi_probe.exe",
         "vulkan_swapchain_probe.exe",
         "vulkan-device-gate-x64.exe",
-    ):
+    )
+    for exe in payload_names:
         require(orchestrator, exe, f"packaged {exe}")
     require(orchestrator, 'MADEIRA_EXE=vulkan-device-gate-x64.exe', "device launch instruction")
 
+    # The iPad UI must expose only the fixed Detroit diagnostic. It stages the
+    # known four binaries, verifies AMD64 PE machine type on the device, keeps
+    # destination writes inside Madeira's own Wine drive, then hands the fixed
+    # entry to the existing library/JIT/FEX/Wine route. It must not call the low-
+    # level Wine process entry point directly or add an arbitrary executable URL.
+    require(app, "DetroitVulkanDeviceGateLauncher", "one-tap iPad launcher")
+    require(app, 'Label("Detroit graphics test"', "plain-language iPad button")
+    require(app, 'gateExecutable = "vulkan-device-gate-x64.exe"', "fixed gate executable")
+    for exe in payload_names[:3]:
+        require(app, f'"{exe}"', f"fixed iPad payload member {exe}")
+    require(app, "guard machine == 0x8664", "on-device x86-64 PE verification")
+    require(app, 'relativePath: "windows/system32/\\(gateExecutable)"', "fixed system32 gate entry")
+    require(app, "resolvedSystem32.path.hasPrefix(drive.path + \"/\")", "system32 containment check")
+    require(app, "ShortcutRouter.shared.pendingExe = entry.windowsPath", "reuse of normal library launch route")
+    require(app, "env.MADEIRA_DEVICE_STATS = 1", "device memory telemetry profile")
+    require(app, "env.MVK_DTR_MSL_LIBRARY_CACHE = 0", "8 GB memory-first shader-cache profile")
+    if "wine_process_start(" in app:
+        raise AssertionError("one-tap Detroit UI must not bypass Madeira's normal JIT/library launch sequence")
+    if "queryItems" in app or "URLComponents" in app:
+        raise AssertionError("one-tap Detroit UI must not grow a user-controlled executable URL route")
+
+    # Existing public madeira://play links remain library-restricted; this test
+    # must not weaken the general shortcut parser to make the diagnostic work.
+    require(shortcuts, 'url.host?.lowercased() == "play"', "existing play-only shortcut parser")
+    require(shortcuts, '@Published var pendingExe: String?', "existing pending library executable route")
+
     print("PASS: Detroit device gate contract")
+    print("PASS: one-tap iPad gate remains fixed, x64-verified, contained, and library-routed")
 
 
 if __name__ == "__main__":
