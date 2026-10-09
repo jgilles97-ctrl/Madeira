@@ -13,40 +13,65 @@ sys.modules["huniecam_evidence_manifest"] = mod
 SPEC.loader.exec_module(mod)
 
 
+def put(root, name, data):
+    path = root / name
+    path.write_text(json.dumps(data))
+    return path
+
+
 class HunieCamEvidenceManifestTests(unittest.TestCase):
     def test_manifest_hashes_files_without_embedding_raw_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            pre = root / "preflight.json"
-            pre.write_text(json.dumps({"schema": "P", "exe_found": True, "identity": {"exe_sha256": "abc", "pe": {"architecture": "i386"}}, "runtime_signals": {"runtime_family": "Unity Mono"}, "depot_shape": {}}))
-            ses = root / "session.json"
-            ses.write_text(json.dumps({"schema": "S", "deepest_stage": 65, "deepest_stage_name": "game managed assembly loaded", "markers": [{"code": "game_assembly"}], "failures": [], "next": {"priority": "device acceptance"}}))
+            pre = put(root, "preflight.json", {"schema": "P", "exe_found": True, "identity": {"exe_sha256": "abc", "pe": {"architecture": "i386"}}, "runtime_signals": {"runtime_family": "Unity Mono"}, "depot_shape": {}})
+            ses = put(root, "session.json", {"schema": "S", "deepest_stage": 65, "deepest_stage_name": "game managed assembly loaded", "markers": [{"code": "game_assembly"}], "failures": [], "next": {"priority": "device acceptance"}})
             log = root / "madeira-log.txt"
             secret = "RAW LOG TOKEN SHOULD NOT APPEAR"
             log.write_text(secret)
             report = mod.build({"preflight": pre, "session": ses, "madeira_log": log})
             rendered = json.dumps(report)
+            self.assertEqual(report["schema"], "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V3")
             self.assertTrue(report["minimum_review_bundle_complete"])
             self.assertNotIn(secret, rendered)
             self.assertFalse(report["privacy"]["raw_logs_embedded"])
             self.assertTrue(any(f["kind"] == "madeira_log" and f["sha256"] for f in report["files"]))
 
+    def test_sealed_launch_identity_requires_matching_context_and_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            context = put(root, "context.json", {"schema": "MADEIRA_HUNIECAM_RUN_CONTEXT_V1", "ready": True, "run_id_sha256": "run-1", "build_fingerprint_sha256": "b", "profile_sha256": "p"})
+            contract = put(root, "contract.json", {"schema": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V2", "valid": True, "run_id_sha256": "run-1", "errors": [], "warnings": []})
+            report = mod.build({"run_context": context, "contract": contract})
+            self.assertTrue(report["sealed_launch_identity_complete"])
+            contract.write_text(json.dumps({"schema": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V2", "valid": True, "run_id_sha256": "different", "errors": [], "warnings": []}))
+            report2 = mod.build({"run_context": context, "contract": contract})
+            self.assertFalse(report2["sealed_launch_identity_complete"])
+            self.assertTrue(report2["integrity_warnings"])
+
+    def test_pe_dependency_audit_must_match_preflight_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pre = put(root, "preflight.json", {"schema": "P", "identity": {"exe_sha256": "abc"}, "runtime_signals": {}})
+            imports = put(root, "imports.json", {"schema": "MADEIRA_HUNIECAM_PE_IMPORTS_V1", "valid": True, "file_sha256": "abc", "import_count": 4, "categories": {"graphics": ["d3d9.dll"]}})
+            report = mod.build({"preflight": pre, "pe_imports": imports})
+            self.assertTrue(report["pe_dependency_audit_complete"])
+            imports.write_text(json.dumps({"schema": "MADEIRA_HUNIECAM_PE_IMPORTS_V1", "valid": True, "file_sha256": "other", "import_count": 1, "categories": {}}))
+            self.assertFalse(mod.build({"preflight": pre, "pe_imports": imports})["pe_dependency_audit_complete"])
+
     def test_guard_failure_is_integrity_warning(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            guard = root / "guard.json"
-            guard.write_text(json.dumps({"schema": "G", "status": "FAIL", "experiment": "bad", "changes": []}))
+            guard = put(root, "guard.json", {"schema": "G", "status": "FAIL", "experiment": "bad", "changes": []})
             report = mod.build({"guard": guard})
             self.assertTrue(report["integrity_warnings"])
 
     def test_acceptance_flag_only_comes_from_acceptance_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            acceptance = root / "acceptance.json"
-            acceptance.write_text(json.dumps({"schema": "A", "accepted": False, "overall": "NOT_READY_MISSING_EVIDENCE", "counts": {}}))
+            acceptance = put(root, "acceptance.json", {"schema": "A", "accepted": False, "overall": "NOT_READY_MISSING_EVIDENCE", "counts": {}})
             report = mod.build({"acceptance": acceptance})
             self.assertFalse(report["device_acceptance_complete"])
-            acceptance.write_text(json.dumps({"schema": "A", "accepted": True, "overall": "ACCEPTED", "counts": {}}))
+            acceptance.write_text(json.dumps({"schema": "A", "accepted": True, "overall": "ACCEPTED", "counts": {}, "run_id_sha256": "run-1"}))
             report = mod.build({"acceptance": acceptance})
             self.assertTrue(report["device_acceptance_complete"])
 
