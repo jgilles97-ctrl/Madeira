@@ -55,13 +55,15 @@ class HunieCamProbeTests(unittest.TestCase):
             make_known_shape(root)
             report = mod.probe_install(root)
             self.assertTrue(report["exe_found"])
-            self.assertEqual(report["schema"], "MADEIRA_HUNIECAM_PROBE_V3")
+            self.assertEqual(report["schema"], "MADEIRA_HUNIECAM_PROBE_V4")
             self.assertEqual(report["identity"]["pe"]["architecture"], "i386")
             self.assertTrue(report["runtime_signals"]["bundled_unity_mono_found"])
             self.assertTrue(report["runtime_signals"]["mono_runtime_found"])
             self.assertFalse(report["runtime_signals"]["gameassembly_found"])
             self.assertEqual(report["runtime_signals"]["runtime_family"], "Unity Mono")
             self.assertFalse(report["runtime_signals"]["wine_mono_required_for_game_runtime"])
+            self.assertTrue(report["runtime_signals"]["renderer_must_be_observed_from_log"])
+            self.assertFalse(report["runtime_signals"]["title_native_fps_cap"])
             self.assertTrue(report["runtime_signals"]["plugin_steam_api_found"])
             self.assertTrue(report["runtime_signals"]["root_steam_api_found"])
             self.assertTrue(report["runtime_signals"]["steam_api_copies_identical"])
@@ -70,7 +72,11 @@ class HunieCamProbeTests(unittest.TestCase):
             self.assertEqual(report["depot_shape"]["matched"], report["depot_shape"]["total"])
             self.assertEqual(report["route"]["cpu"], "Madeira WoW64 + FEX x86")
             self.assertEqual(report["route"]["runtime"], "game-bundled Unity Mono")
-            self.assertEqual(report["route"]["graphics_baseline"], "DXMT Direct3D 9 emulated frontend")
+            self.assertIn("no renderer override", report["route"]["graphics_baseline"])
+            self.assertEqual(report["route"]["minimum_graphics_reference"], "DirectX 9.0a compatible")
+            self.assertEqual(report["route"]["max_builtin_widescreen_resolution_reference"], "1600x900")
+            self.assertEqual(report["route"]["fps_baseline"], 60)
+            self.assertIn("registry", report["route"]["config_registry_path"].lower() if "registry" in report["route"]["config_registry_path"].lower() else "registry")
             self.assertEqual(report["route"]["official_steam_windows_launch"]["executable"], "HunieCamStudio.exe")
             self.assertEqual(report["route"]["official_steam_windows_launch"]["arguments"], "")
             self.assertIn("program folder", report["route"]["working_directory"])
@@ -78,6 +84,8 @@ class HunieCamProbeTests(unittest.TestCase):
             changes = {x["change"] for x in report["conditional_experiments"]}
             self.assertIn("per-game config: env.MADEIRA_WOW_RWX_PLAIN = 1", changes)
             self.assertIn("launch argument: -force-d3d9", changes)
+            d3d = next(x for x in report["conditional_experiments"] if x["change"] == "launch argument: -force-d3d9")
+            self.assertIn("AND", d3d["when"])
 
     def test_existing_unity_output_log_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
