@@ -39,6 +39,8 @@ class HunieCamSaveProbeTests(unittest.TestCase):
             self.assertIn("a.dat", diff["changed"])
             self.assertIn("b.dat", diff["added"])
             self.assertFalse(diff["same_tree"])
+            self.assertEqual(diff["old_tree_sha256"], before["tree_sha256"])
+            self.assertEqual(diff["new_tree_sha256"], after["tree_sha256"])
 
     def test_compare_identical_snapshots_is_stable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -49,6 +51,49 @@ class HunieCamSaveProbeTests(unittest.TestCase):
             diff = mod.compare(first, second)
             self.assertFalse(diff["progress_write_detected"])
             self.assertTrue(diff["same_tree"])
+
+    def test_verify_proves_write_and_relaunch_tree_persistence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "save"
+            root.mkdir()
+            (root / "save.dat").write_bytes(b"before")
+            before = mod.snapshot(root)
+            (root / "save.dat").write_bytes(b"after-progress")
+            after = mod.snapshot(root)
+            # A full relaunch leaves the saved bytes unchanged.
+            relaunch = mod.snapshot(root)
+            verify = mod.verify(before, after, relaunch)
+            self.assertTrue(verify["progress_write_detected"])
+            self.assertTrue(verify["save_tree_survived_relaunch"])
+            self.assertTrue(verify["machine_gate_pass"])
+            self.assertEqual(verify["after_tree_sha256"], verify["relaunch_tree_sha256"])
+            self.assertIn("manual", verify["manual_gate_still_required"].lower())
+
+    def test_verify_fails_when_progress_was_not_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "save.dat").write_bytes(b"same")
+            before = mod.snapshot(root)
+            after = mod.snapshot(root)
+            relaunch = mod.snapshot(root)
+            verify = mod.verify(before, after, relaunch)
+            self.assertFalse(verify["progress_write_detected"])
+            self.assertTrue(verify["save_tree_survived_relaunch"])
+            self.assertFalse(verify["machine_gate_pass"])
+
+    def test_verify_fails_when_tree_changes_across_relaunch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "save.dat").write_bytes(b"before")
+            before = mod.snapshot(root)
+            (root / "save.dat").write_bytes(b"progress")
+            after = mod.snapshot(root)
+            (root / "save.dat").write_bytes(b"lost-or-rewritten")
+            relaunch = mod.snapshot(root)
+            verify = mod.verify(before, after, relaunch)
+            self.assertTrue(verify["progress_write_detected"])
+            self.assertFalse(verify["save_tree_survived_relaunch"])
+            self.assertFalse(verify["machine_gate_pass"])
 
 
 if __name__ == "__main__":
