@@ -34,6 +34,19 @@ static int has_extension(const VkExtensionProperties *exts, uint32_t count,
     return 0;
 }
 
+/* GetProcAddress returns FARPROC, whose prototype differs between MinGW GCC
+ * and clang. Copying the function-pointer representation avoids GCC's
+ * -Wcast-function-type failure without converting through an integer. */
+static PFN_vkGetInstanceProcAddr resolve_gip(HMODULE module)
+{
+    FARPROC raw = GetProcAddress(module, "vkGetInstanceProcAddr");
+    PFN_vkGetInstanceProcAddr out = NULL;
+    if (!raw) return NULL;
+    if (sizeof(out) != sizeof(raw)) return NULL;
+    memcpy(&out, &raw, sizeof(out));
+    return out;
+}
+
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     if (msg == WM_CLOSE) {
@@ -99,7 +112,7 @@ int main(void)
         rc = fail(12, "load-vulkan-loader", "vulkan-1.dll is missing");
         goto done;
     }
-    gip = (PFN_vkGetInstanceProcAddr)GetProcAddress(loader, "vkGetInstanceProcAddr");
+    gip = resolve_gip(loader);
     if (!gip) {
         rc = fail(13, "resolve-vulkan-loader", "vkGetInstanceProcAddr is missing");
         goto done;
