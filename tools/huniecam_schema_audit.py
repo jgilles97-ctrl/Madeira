@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Fail fast when HunieCam evidence-tool schemas drift out of sync.
 
-Cycle 5 exposed a real class of bug: one producer advanced to Session V3 while
-the evidence contract still accepted only V2. This audit imports the current
-producer modules and verifies that the contract/acceptance pipeline recognizes
-the exact current schemas required to close Cycle 6.
+Cycle 7 extends the explicit version matrix through Device Evidence V3,
+Acceptance V9, Manifest V6 and Pipeline V8 so the new drag/release gate cannot
+silently disappear in an older consumer.
 """
 from __future__ import annotations
 
@@ -48,7 +47,6 @@ CURRENT = {
     "manifest": evidence_manifest.SCHEMA,
     "pipeline": pipeline.SCHEMA,
 }
-
 EXPECTED_CURRENT = {
     "preflight": "MADEIRA_HUNIECAM_PROBE_V4",
     "session": "MADEIRA_HUNIECAM_SESSION_V3",
@@ -58,69 +56,33 @@ EXPECTED_CURRENT = {
     "run_context": "MADEIRA_HUNIECAM_RUN_CONTEXT_V2",
     "pe_imports": "MADEIRA_HUNIECAM_PE_IMPORTS_V1",
     "native_modules": "MADEIRA_HUNIECAM_NATIVE_MODULES_V1",
-    "device_evidence": "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2",
+    "device_evidence": "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3",
     "save_snapshot": "MADEIRA_HUNIECAM_SAVE_SNAPSHOT_V2",
     "save_compare": "MADEIRA_HUNIECAM_SAVE_COMPARE_V2",
     "save_verify": "MADEIRA_HUNIECAM_SAVE_VERIFY_V2",
     "repeatability": "MADEIRA_HUNIECAM_REPEATABILITY_V3",
     "contract": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4",
-    "acceptance": "MADEIRA_HUNIECAM_ACCEPTANCE_V8",
-    "manifest": "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V5",
-    "pipeline": "MADEIRA_HUNIECAM_PIPELINE_V7",
+    "acceptance": "MADEIRA_HUNIECAM_ACCEPTANCE_V9",
+    "manifest": "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V6",
+    "pipeline": "MADEIRA_HUNIECAM_PIPELINE_V8",
 }
 
-
 def audit() -> dict[str, Any]:
-    errors: list[str] = []
-    for name, expected in EXPECTED_CURRENT.items():
-        actual = CURRENT.get(name)
-        if actual != expected:
-            errors.append(f"Current {name} schema is {actual!r}; Cycle 6 expects {expected!r}. Update the version matrix deliberately rather than allowing silent drift.")
-
-    contract_current = {
-        "preflight": CURRENT["preflight"],
-        "session": CURRENT["session"],
-        "guard": CURRENT["guard"],
-        "performance": CURRENT["performance"],
-        "run_record": CURRENT["run_record"],
-        "run_context": CURRENT["run_context"],
-        "pe_imports": CURRENT["pe_imports"],
-        "native_modules": CURRENT["native_modules"],
-        "acceptance": CURRENT["acceptance"],
-    }
-    for kind, schema in contract_current.items():
-        allowed = evidence_contract.SUPPORTED.get(kind, set())
-        if schema not in allowed:
-            errors.append(f"Evidence Contract {evidence_contract.SCHEMA} does not support current {kind} schema {schema}.")
-
-    if acceptance.SCHEMA != EXPECTED_CURRENT["acceptance"]:
-        errors.append("Final acceptance module is not the Cycle 6 current version.")
-    if repeatability.REQUIRED_CONTEXT_SCHEMA != run_context.SCHEMA:
-        errors.append(f"Repeatability requires {repeatability.REQUIRED_CONTEXT_SCHEMA}, but current run context is {run_context.SCHEMA}.")
-
-    return {
-        "schema": SCHEMA,
-        "passed": not errors,
-        "current": CURRENT,
-        "expected_current": EXPECTED_CURRENT,
-        "contract_supported": {k: sorted(v) for k, v in evidence_contract.SUPPORTED.items()},
-        "errors": errors,
-        "rule": "A producer schema bump must update this explicit current-version matrix and every consumer that relies on it. Silent schema drift is a CI failure.",
-    }
-
-
-def main() -> int:
-    p = argparse.ArgumentParser(description="Audit HunieCam evidence schema synchronization")
-    p.add_argument("--json", dest="json_path")
-    args = p.parse_args()
-    report = audit()
-    text = json.dumps(report, indent=2, sort_keys=True)
+    errors=[]
+    for name,expected in EXPECTED_CURRENT.items():
+        actual=CURRENT.get(name)
+        if actual!=expected:errors.append(f"Current {name} schema is {actual!r}; Cycle 7 expects {expected!r}. Update the version matrix deliberately rather than allowing silent drift.")
+    contract_current={k:CURRENT[k] for k in ("preflight","session","guard","performance","run_record","run_context","pe_imports","native_modules","acceptance")}
+    for kind,schema in contract_current.items():
+        allowed=evidence_contract.SUPPORTED.get(kind,set())
+        if schema not in allowed:errors.append(f"Evidence Contract {evidence_contract.SCHEMA} does not support current {kind} schema {schema}.")
+    if repeatability.REQUIRED_CONTEXT_SCHEMA!=run_context.SCHEMA:errors.append(f"Repeatability requires {repeatability.REQUIRED_CONTEXT_SCHEMA}, but current run context is {run_context.SCHEMA}.")
+    if getattr(acceptance,"DEVICE_SCHEMA",None)!=device_evidence.SCHEMA:errors.append(f"Acceptance requires device schema {getattr(acceptance,'DEVICE_SCHEMA',None)}, but current producer is {device_evidence.SCHEMA}.")
+    return {"schema":SCHEMA,"passed":not errors,"current":CURRENT,"expected_current":EXPECTED_CURRENT,"contract_supported":{k:sorted(v) for k,v in evidence_contract.SUPPORTED.items()},"errors":errors,"rule":"A producer schema bump must update this explicit current-version matrix and every consumer that relies on it. Silent schema drift is a CI failure."}
+def main()->int:
+    p=argparse.ArgumentParser(description="Audit HunieCam evidence schema synchronization");p.add_argument("--json",dest="json_path");args=p.parse_args();report=audit();text=json.dumps(report,indent=2,sort_keys=True)
     if args.json_path:
         from pathlib import Path
-        Path(args.json_path).write_text(text + "\n", encoding="utf-8")
-    print(text)
-    return 0 if report["passed"] else 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        Path(args.json_path).write_text(text+"\n",encoding="utf-8")
+    print(text);return 0 if report["passed"] else 2
+if __name__=="__main__":raise SystemExit(main())
