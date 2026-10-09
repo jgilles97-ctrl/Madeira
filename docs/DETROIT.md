@@ -55,7 +55,11 @@ The repository now has a reproducible local Vulkan route instead of only a desig
 - ARM64EC `vulkan-1.dll` and `winevulkan.dll` are built reproducibly.
 - Three x86-64 Windows canaries cover Vulkan device creation, Win32 presentation support, and 120 actual swapchain clear/present frames.
 - A fourth x86-64 Windows program runs those canaries in order through the same Wine/FEX child-process path used by real Windows software.
+- Madeira exposes a fixed in-app qualification action that stages only those known canaries, validates their PE identity, and sends the gate through the normal JIT/FEX/Wine launch path.
+- A physical PASS proof is accepted only when it matches the exact current canary fingerprint and records a foreground-only run.
 - CI cross-compiles and validates all four Windows programs and also compiles iPhoneOS-side surface/memory canaries.
+- The MoltenVK builder is pinned to an immutable source commit and now fails closed unless the produced static library proves it is arm64 iPhoneOS device code.
+- The staged MoltenVK archive records a SHA-256 hash plus Xcode and iPhoneOS SDK provenance.
 
 **None of that is a physical-iPad PASS yet.** The next proof must come from the real M4 iPad.
 
@@ -71,19 +75,24 @@ A different source revision requires an explicit `MOLTENVK_DETROIT_REF` override
 
 Important platform distinction: Release003's well-known fullscreen/window transition work is largely **macOS-specific** (`NSWindow` / `NSView`). It should not be counted as an iOS windowing fix. Madeira's own iOS Wine Vulkan driver and `CAMetalLayer` bridge are therefore still essential.
 
-The fork's Detroit Metal-library cache is not macOS-only. Its shader code reads:
+Release003 originally ties its process-wide `MTLLibrary` retention cache and its persistent disk shader-cache behavior to the same switch. That is a poor fit for an 8 GB iPad: retaining every compiled Metal library can consume scarce app memory, while persistent files on disk can still reduce repeat work.
+
+Madeira therefore applies a small, fail-closed source patch identified as:
 
 ```text
-MVK_DTR_MSL_LIBRARY_CACHE
+MADEIRA_IPAD_DISK_CACHE_SPLIT_V1
 ```
 
-and defaults that switch to enabled. When it is set to `0`, the fork bypasses both its process-wide Metal-library cache and its persistent disk-cache path and compiles the Metal library directly. That is why the first 8 GB iPad profile starts with:
+The iPad baseline is deliberately split:
 
 ```text
 MVK_DTR_MSL_LIBRARY_CACHE=0
+MVK_DTR_MSL_LIBRARY_DISK_CACHE=1
 ```
 
-This is intentionally a **memory-first** choice. We can re-enable the cache only after real device measurements show that the retained Metal libraries fit comfortably.
+That means the process-wide Metal-library retention map stays **off**, while the persistent disk path stays **on**. A disk hit can load a compiled `.metallib` without inserting it into the global retention map. A miss can compile normally and record the source/metadata needed for later persistent-cache work.
+
+The patch is reproducible, idempotent, tested in CI, and recorded in the MoltenVK build provenance. If the audited Release003 source anchors drift, the patcher fails instead of guessing.
 
 Release003 also ships a Mac-side `compile_msl_library_cache.sh` helper for turning dumped Metal source into `.metallib` files. That helper uses the Xcode Metal command-line tool and is not an on-device iPad solution by itself.
 
@@ -97,9 +106,10 @@ Known relevant evidence:
 
 - Detroit's large shader-compilation workload has historically produced very high memory pressure in the Apple-Silicon compatibility work.
 - successful Apple-Silicon work uses `MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3`;
-- Release003's persistent Metal cache can consume roughly 3 GB of **disk** storage after compilation;
-- its in-process cache retains `MTLLibrary` objects, which is the more important risk for an 8 GB iPad;
-- Madeira therefore records app footprint/peak footprint and device pressure during serious tests.
+- Release003's persistent Metal cache can consume substantial **disk** storage after compilation;
+- its original in-process cache retains `MTLLibrary` objects, which is the more important risk for an 8 GB iPad;
+- Madeira's cache split keeps the persistent path without requiring the global in-memory retention map;
+- Madeira records app footprint/peak footprint and device pressure during serious tests.
 
 For the iPad build, optimize **peak RAM first**, then launch time. A slower first launch is acceptable if it avoids an iPadOS out-of-memory kill.
 
@@ -108,20 +118,23 @@ For the iPad build, optimize **peak RAM first**, then launch time. A slower firs
 Start with these assumptions until device measurements justify increasing them:
 
 ```text
-Resolution:       1280x720 or closest supported 16:9 mode
-Preset:           Low
-Frame target:     30 FPS
-Depth of field:   Off
-HDR:              Off
-High-res mode:    Off
-Shader source:    LZ4 compression enabled
-Detroit MSL cache: disabled for the first memory baseline
-Device stats:     enabled
+Resolution:               1280x720 or closest supported 16:9 mode
+Preset:                   Low
+Frame target:             30 FPS
+Depth of field:           Off
+HDR:                      Off
+High-res mode:            Off
+Shader compression:       algorithm 3
+Process Metal cache:      Off
+Persistent disk cache:    On
+Device stats:             On
 ```
 
 The project profile is `docs/detroit-m4-8gb.cfg`.
 
 The desktop Detroit fork recommends `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=1`, but current MoltenVK documents that switch as having **no effect on iOS or tvOS**. Do not count it as an iPad memory/performance lever.
+
+Private Metal APIs remain disabled at build time. They are not part of the baseline and must not be enabled merely because a later failure is difficult.
 
 ## Implementation gates
 
@@ -143,7 +156,16 @@ Expected output:
 toolchains/moltenvk-detroit-ios/lib/libMoltenVK.a
 ```
 
-The default source is the audited Release003 commit, and the fork's own dependency resolver is used so its matching SPIRV-Cross revision is not accidentally replaced.
+The builder now requires all of the following before staging that archive:
+
+- audited Release003 source commit unless an override is explicit;
+- matching fork dependencies;
+- Madeira's audited low-memory cache split;
+- exactly `arm64` architecture;
+- Mach-O metadata proving iPhoneOS **device**, not iOS Simulator or macOS;
+- private Metal APIs forced off at compile time.
+
+`BUILD-INFO.txt` records source commit, local patch identity, platform, architecture, archive SHA-256, Xcode version, iPhoneOS SDK path/version, and build time.
 
 ### Gate V1 — Wine Vulkan integration
 
@@ -179,11 +201,7 @@ The next two x64 canaries must:
 6. clear/present **120 consecutive frames**;
 7. exit cleanly.
 
-The one-command controller runs V2 and V3 in the required order:
-
-```text
-MADEIRA_EXE=vulkan-device-gate-x64.exe
-```
+The in-app qualification action runs V2 and V3 in the required order through Madeira's normal launch lifecycle. The Windows controller removes stale proof before starting and writes a new proof only after every child stage succeeds.
 
 Do not launch Detroit as the next debugging step unless the log ends with:
 
@@ -194,6 +212,10 @@ PRESENTED_120_FRAMES=PASS
 OVERALL=PASS
 NEXT_GATE=detroit-process-and-shader-compilation
 ```
+
+The proof must also match the SHA-256-derived fingerprint of the exact four canary executables bundled in the current app. Rebuilding any canary invalidates old proof automatically.
+
+Qualification is foreground-only. If the app stops being active during the gate, that run is not valid evidence. This avoids treating an iOS background/device-loss event as a renderer qualification.
 
 A failure stops the sequence immediately and marks later stages as skipped, so the first broken layer stays obvious.
 
@@ -213,13 +235,15 @@ Record at least:
 - time to completion;
 - iPad thermal state;
 - compression setting;
-- whether the Detroit Metal-library cache is enabled.
+- process Metal-library cache state;
+- persistent disk-cache state.
 
 First baseline:
 
 ```text
 MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3
 MVK_DTR_MSL_LIBRARY_CACHE=0
+MVK_DTR_MSL_LIBRARY_DISK_CACHE=1
 ```
 
 If shader processing dies under memory pressure, treat memory/cache behavior as the first suspect before changing unrelated FEX or Wine code.
@@ -260,13 +284,15 @@ Do not delete shader caches automatically on every launch. Destructive cleanup h
 
 Use this order:
 
-1. establish the first low-memory baseline with the Detroit MSL library cache disabled;
-2. preserve known-good game/runtime caches;
-3. validate cache version/build identity;
-4. quarantine only a cache proven incompatible;
-5. regenerate only when required;
-6. test the Metal-library cache as a separate optimization after memory is known safe;
-7. expose destructive rebuild actions explicitly rather than doing them silently.
+1. keep shader-source compression at algorithm 3 for the first 8 GB baseline;
+2. keep the process-wide `MTLLibrary` retention map disabled;
+3. keep the independent persistent disk-cache path enabled;
+4. preserve known-good game/runtime caches;
+5. validate cache version/build identity;
+6. quarantine only a cache proven incompatible;
+7. regenerate only when required;
+8. test any higher-memory caching mode as a separate optimization after memory is known safe;
+9. expose destructive rebuild actions explicitly rather than doing them silently.
 
 A future persistent-cache design must stay within the iPad app sandbox and use public Apple APIs. The Release003 Mac helper is useful research, not an on-device deployment mechanism.
 
@@ -277,9 +303,9 @@ Do not commit or redistribute Detroit game files, Steam authentication material,
 ## Current blockers, in priority order
 
 1. **Run the one-command Vulkan gate on the physical M4 iPad.** This is the first remaining proof that CI cannot supply.
-2. **Launch Detroit through the now-proven graphics path.**
+2. **Launch Detroit through the proven graphics path only after that proof is current.**
 3. **Keep shader compilation alive within the 8 GB memory limit.**
-4. **Measure whether Release003's Metal-library cache can be safely re-enabled.**
+4. **Validate the split persistent-cache behavior under a real Detroit shader workload.**
 5. **Fix any Detroit-specific shader/rendering failures that remain on iOS.**
 6. **Add/verify audio, saves, controller, mouse/keyboard, then touch-first input.**
 7. **Reach stable 720p/30 and 30-minute stability.**
@@ -295,6 +321,7 @@ real M4 iPad
   -> Vulkan device PASS
   -> Windows-to-Metal surface PASS
   -> 120 consecutive presented frames PASS
+  -> current foreground proof fingerprint accepted by Madeira
 ```
 
 Only then does the project advance to Detroit process start and shader compilation.
