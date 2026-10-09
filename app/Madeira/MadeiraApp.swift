@@ -255,14 +255,18 @@ enum DetroitVulkanDeviceGateLauncher {
 }
 
 /// Strict reader for proof emitted by the x86-64 Windows controller after the
-/// physical iPad actually presents 120 frames. Instead of collapsing every
-/// invalid state to false, expose a plain-language reason so the first physical
-/// device session says exactly what must happen next.
+/// physical iPad actually presents 120 frames. Qualification remains success-
+/// only. A separate last-result record may explain a failure, but it can never
+/// satisfy validForCurrentPayload or unlock the next Detroit gate.
 @MainActor
 enum DetroitVulkanDeviceGateProof {
     static let schema = "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"
+    static let lastResultSchema = "MADEIRA_DETROIT_DEVICE_GATE_RESULT_V1"
     static var url: URL {
         LibraryModel.drive.appendingPathComponent("madeira-detroit-vulkan-gate.txt", isDirectory: false)
+    }
+    static var lastResultURL: URL {
+        LibraryModel.drive.appendingPathComponent("madeira-detroit-vulkan-last-result.txt", isDirectory: false)
     }
 
     enum Status: Equatable {
@@ -276,6 +280,12 @@ enum DetroitVulkanDeviceGateProof {
         case incompletePass
         case currentPayloadUnreadable
         case payloadChanged
+        case payloadFingerprintFailed
+        case vulkanDeviceFailed
+        case win32SurfaceFailed
+        case presentationFailed
+        case proofPublicationFailed
+        case unknownFailure
 
         var passed: Bool { self == .passed }
 
@@ -284,6 +294,12 @@ enum DetroitVulkanDeviceGateProof {
             case .passed: return "Detroit graphics test — Passed"
             case .payloadChanged: return "Detroit graphics test — Rerun needed"
             case .foregroundLost: return "Detroit graphics test — Rerun in foreground"
+            case .payloadFingerprintFailed: return "Detroit graphics test — Payload failed"
+            case .vulkanDeviceFailed: return "Detroit graphics test — Vulkan failed"
+            case .win32SurfaceFailed: return "Detroit graphics test — Surface failed"
+            case .presentationFailed: return "Detroit graphics test — Presentation failed"
+            case .proofPublicationFailed: return "Detroit graphics test — Proof save failed"
+            case .unknownFailure: return "Detroit graphics test — Failed"
             default: return "Detroit graphics test"
             }
         }
@@ -297,25 +313,37 @@ enum DetroitVulkanDeviceGateProof {
             case .foregroundLost:
                 return "The previous test left the foreground, so its result cannot qualify Detroit. Run it again and keep Madeira open."
             case .malformedProof:
-                return "The previous test proof is damaged or incomplete. Run the graphics test again."
+                return "The saved test record is damaged or incomplete. Run the graphics test again."
             case .wrongSchema:
-                return "The saved proof is from an older test format. Run the current graphics test again."
+                return "The saved test record is from an older test format. Run the current graphics test again."
             case .wrongArchitecture:
-                return "The saved proof did not come from the required x86-64 Windows test path. Run the current graphics test again."
+                return "The saved test record did not come from the required x86-64 Windows path. Run the current graphics test again."
             case .notPhysicalDevice:
-                return "The saved proof does not confirm a fully local physical-iPad run. Run the graphics test on this iPad."
+                return "The saved test record does not confirm a fully local physical-iPad run. Run the graphics test on this iPad."
             case .incompletePass:
-                return "The saved proof is missing one or more required graphics passes. Run the test again and inspect the first failed stage."
+                return "The PASS proof is missing one or more required graphics checks. Run the test again."
             case .currentPayloadUnreadable:
                 return "Madeira cannot verify the test/runtime files bundled in this app. Rebuild the Detroit Vulkan runtime."
             case .payloadChanged:
-                return "The local graphics runtime changed since the last pass. Rerun the test so the new runtime is physically proven."
+                return "The local graphics runtime changed since the last test. Rerun it so this exact runtime is physically proven."
+            case .payloadFingerprintFailed:
+                return "Madeira could not verify all four Windows test files. Rebuild the Detroit Vulkan runtime before testing again."
+            case .vulkanDeviceFailed:
+                return "The basic Vulkan device test failed. Fix the Wine/MoltenVK device path before testing Detroit."
+            case .win32SurfaceFailed:
+                return "Vulkan started, but the Windows-window to iPad Metal-surface test failed. Fix the surface bridge before testing Detroit."
+            case .presentationFailed:
+                return "The surface worked, but Madeira could not complete the 120-frame presentation test. Fix swapchain/presentation before testing Detroit."
+            case .proofPublicationFailed:
+                return "The graphics checks passed, but Madeira could not save trustworthy PASS proof. Fix proof storage and rerun before Detroit."
+            case .unknownFailure:
+                return "The graphics gate failed in an unrecognized stage. Open the live log and use the first FAILED_GATE line."
             }
         }
     }
 
-    private static func fields() -> [String: String]? {
-        guard let data = try? Data(contentsOf: url), data.count > 0, data.count <= 4096,
+    private static func fields(at fileURL: URL) -> [String: String]? {
+        guard let data = try? Data(contentsOf: fileURL), data.count > 0, data.count <= 4096,
               let text = String(data: data, encoding: .utf8) else { return nil }
         var result: [String: String] = [:]
         for raw in text.split(whereSeparator: \Character.isNewline) {
@@ -329,28 +357,61 @@ enum DetroitVulkanDeviceGateProof {
         return result
     }
 
+    private static func currentFingerprint() -> String? {
+        guard let expected = try? DetroitVulkanDeviceGateLauncher.bundledPayloadFingerprint() else { return nil }
+        return String(format: "%016llx", expected)
+    }
+
+    private static func statusFromLastResult(_ values: [String: String]) -> Status {
+        guard values["SCHEMA"] == lastResultSchema else { return .wrongSchema }
+        guard values["ARCH"] == "x86_64-windows" else { return .wrongArchitecture }
+        guard values["EXECUTION"] == "physical-device-local" else { return .notPhysicalDevice }
+        guard values["OVERALL"] == "FAIL" else { return .incompletePass }
+
+        let failedGate = values["FAILED_GATE"] ?? ""
+        if failedGate == "payload-fingerprint" { return .payloadFingerprintFailed }
+
+        guard let expected = currentFingerprint() else { return .currentPayloadUnreadable }
+        guard values["PAYLOAD_FNV64"]?.lowercased() == expected else { return .payloadChanged }
+
+        switch failedGate {
+        case "vulkan-device": return .vulkanDeviceFailed
+        case "win32-surface": return .win32SurfaceFailed
+        case "present-120": return .presentationFailed
+        case "foreground-integrity": return .foregroundLost
+        case "proof-publication": return .proofPublicationFailed
+        default: return .unknownFailure
+        }
+    }
+
     static var status: Status {
         let fm = FileManager.default
         if fm.fileExists(atPath: DetroitVulkanDeviceGateLauncher.foregroundInvalidationURL.path) {
             return .foregroundLost
         }
-        guard fm.fileExists(atPath: url.path) else { return .notRun }
-        guard let values = fields() else { return .malformedProof }
-        guard values["SCHEMA"] == schema else { return .wrongSchema }
-        guard values["ARCH"] == "x86_64-windows" else { return .wrongArchitecture }
-        guard values["EXECUTION"] == "physical-device-local" else { return .notPhysicalDevice }
-        guard values["FOREGROUND_INTEGRITY"] == "PASS",
-              values["VULKAN_DEVICE"] == "PASS",
-              values["WIN32_SURFACE"] == "PASS",
-              values["PRESENTED_120_FRAMES"] == "PASS",
-              values["OVERALL"] == "PASS",
-              values["NEXT_GATE"] == "detroit-process-and-shader-compilation",
-              let recorded = values["PAYLOAD_FNV64"]?.lowercased() else { return .incompletePass }
-        guard let expected = try? DetroitVulkanDeviceGateLauncher.bundledPayloadFingerprint() else {
-            return .currentPayloadUnreadable
+
+        if fm.fileExists(atPath: url.path) {
+            guard let values = fields(at: url) else { return .malformedProof }
+            guard values["SCHEMA"] == schema else { return .wrongSchema }
+            guard values["ARCH"] == "x86_64-windows" else { return .wrongArchitecture }
+            guard values["EXECUTION"] == "physical-device-local" else { return .notPhysicalDevice }
+            guard values["FOREGROUND_INTEGRITY"] == "PASS",
+                  values["VULKAN_DEVICE"] == "PASS",
+                  values["WIN32_SURFACE"] == "PASS",
+                  values["PRESENTED_120_FRAMES"] == "PASS",
+                  values["OVERALL"] == "PASS",
+                  values["NEXT_GATE"] == "detroit-process-and-shader-compilation",
+                  let recorded = values["PAYLOAD_FNV64"]?.lowercased() else { return .incompletePass }
+            guard let expected = currentFingerprint() else { return .currentPayloadUnreadable }
+            guard recorded == expected else { return .payloadChanged }
+            return .passed
         }
-        guard recorded == String(format: "%016llx", expected) else { return .payloadChanged }
-        return .passed
+
+        if fm.fileExists(atPath: lastResultURL.path) {
+            guard let values = fields(at: lastResultURL) else { return .malformedProof }
+            return statusFromLastResult(values)
+        }
+        return .notRun
     }
 
     static var validForCurrentPayload: Bool { status.passed }
