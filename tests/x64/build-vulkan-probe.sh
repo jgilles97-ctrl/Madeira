@@ -4,6 +4,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 SRC="$HERE/vulkan_probe.c"
+PATCHER="$HERE/patch-detroit-descriptor-features.py"
+PATCHED_SRC="${TMPDIR:-/tmp}/madeira-detroit-vulkan-probe-patched.c"
 OUT="${VULKAN_PROBE_OUT:-$HERE/vulkan_probe.exe}"
 VK_INCLUDE="${VULKAN_HEADERS:-$REPO_ROOT/toolchains/moltenvk-detroit-ios/include}"
 
@@ -42,9 +44,17 @@ if [ ! -f "$VK_INCLUDE/vulkan/vulkan.h" ]; then
     exit 3
 fi
 
+if [ ! -f "$PATCHER" ]; then
+    echo "error: Detroit descriptor feature patcher is missing: $PATCHER" >&2
+    exit 4
+fi
+
+python3 "$PATCHER" "$SRC" "$PATCHED_SRC"
+
 echo "=== Madeira Windows x64 Vulkan probe ==="
 echo "compiler: $CC"
 echo "headers:  $VK_INCLUDE"
+echo "source:   $PATCHED_SRC"
 echo "output:   $OUT"
 
 # Windows GetProcAddress returns FARPROC, while Vulkan exposes exact PFN_vk*
@@ -56,7 +66,7 @@ echo "output:   $OUT"
     -std=c11 -O2 -g \
     -Wall -Wextra -Werror -Wno-cast-function-type \
     -I"$VK_INCLUDE" \
-    -o "$OUT" "$SRC" \
+    -o "$OUT" "$PATCHED_SRC" \
     -lkernel32
 
 # Keep deployment explicit: building a probe must never silently overwrite a
