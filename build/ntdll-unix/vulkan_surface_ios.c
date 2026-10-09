@@ -17,16 +17,11 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "vulkan_surface_ios.h"
+
 #ifndef RTLD_DEFAULT
 #define RTLD_DEFAULT ((void *)-2)
 #endif
-
-struct madeira_vulkan_surface_binding
-{
-    void *metal_view;   /* retained by IOSDisplayShim */
-    void *metal_layer;  /* borrowed from metal_view; same lifetime */
-    void *hwnd;         /* diagnostics only */
-};
 
 typedef void *(*create_metal_view_fn)(void *view, void *device);
 typedef void *(*get_metal_layer_fn)(void *view);
