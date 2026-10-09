@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import sys
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -14,6 +15,7 @@ TOOL = ROOT / "tools" / "detroit_readiness.py"
 spec = importlib.util.spec_from_file_location("detroit_readiness", TOOL)
 assert spec and spec.loader
 mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 
 
@@ -93,15 +95,10 @@ def test_no_destructive_behavior(root: pathlib.Path) -> None:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = pathlib.Path(tmp)
-        test_clean_fixture(root / "clean") if False else None
-
     # Give each case its own tree so a deliberately bad fixture cannot leak.
     for test in (test_clean_fixture, test_known_failures, test_no_destructive_behavior):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            root.mkdir(parents=True, exist_ok=True)
             test(root)
             print(f"PASS {test.__name__}")
     return 0
