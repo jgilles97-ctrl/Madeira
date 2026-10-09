@@ -2,8 +2,9 @@
 """Read-only fingerprint/compare helper for HunieCam Studio save data.
 
 It never parses or uploads save contents. A snapshot records relative names,
-sizes and SHA-256 hashes so a before/after/relaunch test can prove that progress
-was written and survived without exposing the save bytes themselves.
+sizes and SHA-256 hashes. A verification combines BEFORE, AFTER visible
+progress, and AFTER FULL RELAUNCH so acceptance can prove both that the game
+wrote progress and that the written tree survived the restart.
 """
 from __future__ import annotations
 
@@ -12,7 +13,9 @@ import hashlib
 import json
 import pathlib
 
-SCHEMA = "MADEIRA_HUNIECAM_SAVE_SNAPSHOT_V1"
+SNAPSHOT_SCHEMA = "MADEIRA_HUNIECAM_SAVE_SNAPSHOT_V1"
+COMPARE_SCHEMA = "MADEIRA_HUNIECAM_SAVE_COMPARE_V1"
+VERIFY_SCHEMA = "MADEIRA_HUNIECAM_SAVE_VERIFY_V1"
 
 
 def hash_file(path: pathlib.Path) -> str:
@@ -48,7 +51,7 @@ def snapshot(root: pathlib.Path) -> dict[str, object]:
         aggregate.update(str(item["sha256"]).encode("ascii"))
         aggregate.update(b"\n")
     return {
-        "schema": SCHEMA,
+        "schema": SNAPSHOT_SCHEMA,
         "source_label": root.name,
         "exists": root.is_dir(),
         "file_count": len(entries),
@@ -69,13 +72,36 @@ def compare(old: dict[str, object], new: dict[str, object]) -> dict[str, object]
     )
     unchanged = sorted(set(old_files) & set(new_files) - set(changed))
     return {
-        "schema": "MADEIRA_HUNIECAM_SAVE_COMPARE_V1",
+        "schema": COMPARE_SCHEMA,
         "changed": changed,
         "added": added,
         "removed": removed,
         "unchanged_count": len(unchanged),
         "progress_write_detected": bool(changed or added or removed),
         "same_tree": old.get("tree_sha256") == new.get("tree_sha256"),
+        "old_tree_sha256": old.get("tree_sha256"),
+        "new_tree_sha256": new.get("tree_sha256"),
+    }
+
+
+def verify(before: dict[str, object], after: dict[str, object], relaunch: dict[str, object]) -> dict[str, object]:
+    write = compare(before, after)
+    after_hash = after.get("tree_sha256")
+    relaunch_hash = relaunch.get("tree_sha256")
+    after_exists = bool(after.get("exists"))
+    relaunch_exists = bool(relaunch.get("exists"))
+    persisted = bool(after_exists and relaunch_exists and after_hash is not None and after_hash == relaunch_hash)
+    return {
+        "schema": VERIFY_SCHEMA,
+        "progress_write_detected": bool(write["progress_write_detected"]),
+        "write_compare": write,
+        "after_tree_sha256": after_hash,
+        "relaunch_tree_sha256": relaunch_hash,
+        "after_file_count": after.get("file_count"),
+        "relaunch_file_count": relaunch.get("file_count"),
+        "save_tree_survived_relaunch": persisted,
+        "machine_gate_pass": bool(write["progress_write_detected"] and persisted),
+        "manual_gate_still_required": "Confirm inside the relaunched game that the same visible progress actually returned; matching files alone do not prove the game interpreted them correctly.",
     }
 
 
@@ -93,9 +119,19 @@ def main() -> int:
     comp.add_argument("before", type=pathlib.Path)
     comp.add_argument("after", type=pathlib.Path)
     comp.add_argument("--json", dest="json_path", type=pathlib.Path)
+    ver = sub.add_parser("verify")
+    ver.add_argument("before", type=pathlib.Path)
+    ver.add_argument("after", type=pathlib.Path)
+    ver.add_argument("relaunch", type=pathlib.Path)
+    ver.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = parser.parse_args()
 
-    report = snapshot(args.save_dir) if args.command == "snapshot" else compare(load(args.before), load(args.after))
+    if args.command == "snapshot":
+        report = snapshot(args.save_dir)
+    elif args.command == "compare":
+        report = compare(load(args.before), load(args.after))
+    else:
+        report = verify(load(args.before), load(args.after), load(args.relaunch))
     rendered = json.dumps(report, indent=2, sort_keys=True)
     if args.json_path:
         args.json_path.write_text(rendered + "\n", encoding="utf-8")
