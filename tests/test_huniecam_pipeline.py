@@ -67,20 +67,22 @@ class HunieCamPipelineTests(unittest.TestCase):
             ]))
             out = base / "evidence"
             summary = mod.run(install, madeira, unity, out)
-            self.assertEqual(summary["schema"], "MADEIRA_HUNIECAM_PIPELINE_V2")
+            self.assertEqual(summary["schema"], "MADEIRA_HUNIECAM_PIPELINE_V3")
             self.assertEqual(summary["guard_status"], "PASS")
             self.assertTrue(summary["evidence_contract_valid"])
             self.assertTrue(summary["run_record_ready"])
             self.assertTrue(summary["fps_cap_effective"])
             self.assertTrue(summary["performance_comparison_clean"])
             self.assertTrue(summary["owned_build_fingerprint"])
+            self.assertIsNone(summary["failure_capsule_signature"])
             self.assertGreaterEqual(summary["deepest_stage"], 75)
             self.assertEqual(summary["next_run_status"], "RUN_ACCEPTANCE_BASELINE")
             for name in (
                 "huniecam-preflight.json", "huniecam-session.json", "huniecam-issues.json",
-                "huniecam-performance.json", "huniecam-run-record.json",
-                "huniecam-evidence-contract.json", "huniecam-next-run.json",
-                "huniecam-evidence-manifest.json", "huniecam-pipeline-summary.json",
+                "huniecam-performance.json", "huniecam-failure-capsule.json",
+                "huniecam-run-record.json", "huniecam-evidence-contract.json",
+                "huniecam-next-run.json", "huniecam-evidence-manifest.json",
+                "huniecam-pipeline-summary.json",
             ):
                 self.assertTrue((out / name).is_file(), name)
             manifest = json.loads((out / "huniecam-evidence-manifest.json").read_text())
@@ -112,6 +114,21 @@ class HunieCamPipelineTests(unittest.TestCase):
             self.assertFalse(summary["fps_cap_effective"])
             self.assertFalse(summary["performance_comparison_clean"])
             self.assertTrue(summary["evidence_contract_valid"])
+
+    def test_pipeline_adds_failure_capsule_and_optional_registry_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            install = base / "game"
+            install.mkdir()
+            make_install(install)
+            madeira = base / "madeira-log.txt"
+            madeira.write_text("[jit-debugger] attached=0 at the pool request\n")
+            registry = '[Software\\\\HuniePot\\\\HunieCam Studio]\n"Screenmanager Resolution Width"=dword:00000500\n'
+            out = base / "evidence"
+            summary = mod.run(install, madeira, None, out, registry_text=registry)
+            self.assertEqual(summary["failure_capsule_signature"], "jit_missing")
+            self.assertTrue(summary["registry_configuration_found"])
+            self.assertTrue((out / "huniecam-registry-snapshot.json").is_file())
 
 
 if __name__ == "__main__":
