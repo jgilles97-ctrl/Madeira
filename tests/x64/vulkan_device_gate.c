@@ -10,10 +10,15 @@
  * not by the iOS UI. The previous proof is deleted before any test runs, and a
  * new proof appears only after all three child canaries return success.
  *
+ * PASS proof and failure diagnosis are intentionally separate. A second
+ * best-effort last-result record may describe the first failed gate, but it can
+ * never qualify Detroit. Only the strict success-only proof can do that.
+ *
  * The proof also fingerprints the exact four x64 Windows binaries used by this
- * gate. Madeira recomputes the same fingerprint from the test payload bundled
- * in the currently installed app. A proof from an older renderer/test build is
- * therefore rejected automatically instead of silently unlocking Detroit.
+ * gate. The controller executable carries a deterministic build ID derived from
+ * the MoltenVK/Wine/FEX/iOS runtime, so the same payload fingerprint changes if
+ * either the canaries or that runtime changes. Madeira recomputes the fingerprint
+ * from the currently installed app and rejects stale proof automatically.
  *
  * iOS may refuse active Metal command buffers when an app leaves the foreground.
  * Madeira writes a fixed invalidation marker if this diagnostic becomes inactive
@@ -29,8 +34,11 @@
 
 #define GATE_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_V1"
 #define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"
+#define RESULT_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_RESULT_V1"
 #define PROOF_PATH "C:\\madeira-detroit-vulkan-gate.txt"
 #define PROOF_TEMP_PATH "C:\\madeira-detroit-vulkan-gate.tmp"
+#define RESULT_PATH "C:\\madeira-detroit-vulkan-last-result.txt"
+#define RESULT_TEMP_PATH "C:\\madeira-detroit-vulkan-last-result.tmp"
 #define FOREGROUND_INVALID_PATH "C:\\madeira-detroit-vulkan-gate-invalid.txt"
 #define FNV64_OFFSET UINT64_C(14695981039346656037)
 #define FNV64_PRIME UINT64_C(1099511628211)
@@ -102,11 +110,13 @@ static int payload_fingerprint(uint64_t *out_hash)
     return 0;
 }
 
-static void clear_stale_proof(void)
+static void clear_stale_state(void)
 {
-    /* Stale PASS/invalidation state is more dangerous than no proof. */
+    /* Stale PASS/invalidation/diagnostic state is more dangerous than no state. */
     DeleteFileA(PROOF_TEMP_PATH);
     DeleteFileA(PROOF_PATH);
+    DeleteFileA(RESULT_TEMP_PATH);
+    DeleteFileA(RESULT_PATH);
     DeleteFileA(FOREGROUND_INVALID_PATH);
 }
 
@@ -125,6 +135,86 @@ static int foreground_integrity_ok(void)
     }
     printf("FOREGROUND_INTEGRITY=PASS\n");
     return 1;
+}
+
+/* Best-effort diagnostic only. Failure to write this file never creates or
+ * invalidates PASS proof and never changes the gate's underlying return code. */
+static void write_last_result(uint64_t payload_hash, int payload_hash_valid,
+                              const char *overall, const char *failed_gate,
+                              const char *next_action)
+{
+    char result[1024];
+    char payload[32];
+    int result_len;
+    HANDLE file;
+    DWORD written = 0;
+    BOOL ok;
+
+    if (payload_hash_valid)
+        snprintf(payload, sizeof(payload), "%016llx", (unsigned long long)payload_hash);
+    else
+        snprintf(payload, sizeof(payload), "unavailable");
+
+    result_len = snprintf(
+        result, sizeof(result),
+        "SCHEMA=%s\r\n"
+        "ARCH=x86_64-windows\r\n"
+        "EXECUTION=physical-device-local\r\n"
+        "PAYLOAD_FNV64=%s\r\n"
+        "OVERALL=%s\r\n"
+        "FAILED_GATE=%s\r\n"
+        "NEXT_ACTION=%s\r\n",
+        RESULT_SCHEMA, payload, overall, failed_gate, next_action);
+    if (result_len <= 0 || (size_t)result_len >= sizeof(result)) {
+        printf("LAST_RESULT_RECORD=FAIL\n");
+        printf("LAST_RESULT_ERROR=format-overflow\n");
+        return;
+    }
+
+    DeleteFileA(RESULT_TEMP_PATH);
+    file = CreateFileA(RESULT_TEMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        printf("LAST_RESULT_RECORD=FAIL\n");
+        printf("LAST_RESULT_ERROR=CreateFileA:%lu\n", (unsigned long)GetLastError());
+        return;
+    }
+
+    ok = WriteFile(file, result, (DWORD)result_len, &written, NULL);
+    if (!ok || written != (DWORD)result_len) {
+        DWORD err = GetLastError();
+        CloseHandle(file);
+        DeleteFileA(RESULT_TEMP_PATH);
+        printf("LAST_RESULT_RECORD=FAIL\n");
+        printf("LAST_RESULT_ERROR=WriteFile:%lu:%lu/%lu\n",
+               (unsigned long)err,
+               (unsigned long)written,
+               (unsigned long)result_len);
+        return;
+    }
+
+    if (!FlushFileBuffers(file)) {
+        DWORD err = GetLastError();
+        CloseHandle(file);
+        DeleteFileA(RESULT_TEMP_PATH);
+        printf("LAST_RESULT_RECORD=FAIL\n");
+        printf("LAST_RESULT_ERROR=FlushFileBuffers:%lu\n", (unsigned long)err);
+        return;
+    }
+    CloseHandle(file);
+
+    if (!MoveFileExA(RESULT_TEMP_PATH, RESULT_PATH,
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DWORD err = GetLastError();
+        DeleteFileA(RESULT_TEMP_PATH);
+        printf("LAST_RESULT_RECORD=FAIL\n");
+        printf("LAST_RESULT_ERROR=MoveFileExA:%lu\n", (unsigned long)err);
+        return;
+    }
+
+    printf("LAST_RESULT_PATH=%s\n", RESULT_PATH);
+    printf("LAST_RESULT_RECORD=PASS\n");
+    fflush(stdout);
 }
 
 static int write_full_pass_proof(uint64_t payload_hash)
@@ -278,12 +368,13 @@ int main(void)
     uint64_t payload_hash = 0;
     size_t i;
 
-    clear_stale_proof();
+    clear_stale_state();
 
     printf("SCHEMA=%s\n", GATE_SCHEMA);
     printf("ARCH=x86_64-windows\n");
     printf("PURPOSE=prove-local-FEX-Wine-Vulkan-MoltenVK-Metal-path-before-Detroit\n");
     printf("STALE_PROOF_CLEARED=1\n");
+    printf("STALE_RESULT_CLEARED=1\n");
     printf("FOREGROUND_GUARD_ARMED=1\n");
     fflush(stdout);
 
@@ -292,6 +383,8 @@ int main(void)
         printf("FAILED_GATE=payload-fingerprint\n");
         printf("PROOF_RESULT=NOT_WRITTEN\n");
         printf("NEXT_ACTION=repair-device-gate-payload-before-launching-Detroit\n");
+        write_last_result(0, 0, "FAIL", "payload-fingerprint",
+                          "repair-device-gate-payload-before-launching-Detroit");
         fflush(stdout);
         return 12;
     }
@@ -306,6 +399,8 @@ int main(void)
                 printf("GATE_RESULT=%s:SKIP\n", stages[j].name);
             printf("PROOF_RESULT=NOT_WRITTEN\n");
             printf("NEXT_ACTION=fix-this-gate-before-launching-Detroit\n");
+            write_last_result(payload_hash, 1, "FAIL", stages[i].name,
+                              "fix-this-gate-before-launching-Detroit");
             fflush(stdout);
             return rc;
         }
@@ -321,6 +416,8 @@ int main(void)
         printf("FAILED_GATE=foreground-integrity\n");
         printf("PROOF_RESULT=NOT_WRITTEN\n");
         printf("NEXT_ACTION=rerun-graphics-test-with-Madeira-kept-in-foreground\n");
+        write_last_result(payload_hash, 1, "FAIL", "foreground-integrity",
+                          "rerun-graphics-test-with-Madeira-kept-in-foreground");
         fflush(stdout);
         return 28;
     }
@@ -331,11 +428,15 @@ int main(void)
             printf("OVERALL=FAIL\n");
             printf("FAILED_GATE=proof-publication\n");
             printf("NEXT_ACTION=fix-proof-publication-before-launching-Detroit\n");
+            write_last_result(payload_hash, 1, "FAIL", "proof-publication",
+                              "fix-proof-publication-before-launching-Detroit");
             fflush(stdout);
             return proof_rc;
         }
     }
 
+    write_last_result(payload_hash, 1, "PASS", "none",
+                      "detroit-process-and-shader-compilation");
     printf("OVERALL=PASS\n");
     printf("NEXT_GATE=detroit-process-and-shader-compilation\n");
     fflush(stdout);
