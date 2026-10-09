@@ -4,12 +4,16 @@
 These checks do not claim that Vulkan works on an iPad. They stop accidental
 regressions in the *contract* before expensive device testing: portable probes,
 Windows guest Vulkan semantics, real Win32 WSI coverage, static MoltenVK loader
-wiring, and reuse of Madeira's existing Metal window lifetime path.
+wiring, deterministic link inclusion, reversible non-Vulkan builds, and reuse
+of Madeira's existing Metal window lifetime path.
 """
 
 from __future__ import annotations
 
 import pathlib
+import subprocess
+import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -30,6 +34,20 @@ def check_builder(text: str, name: str) -> None:
     require("-lvulkan" not in text.lower(), f"{name} must not link a host Vulkan import library")
 
 
+def exercise_driver_patcher() -> str:
+    patcher = ROOT / "build/win32u-unix/patch_driver_vulkan.py"
+    source = ROOT / "build/win32u-unix/driver_ios.c"
+    with tempfile.TemporaryDirectory() as tmp:
+        output = pathlib.Path(tmp) / "driver_ios_vulkan.c"
+        subprocess.run(
+            [sys.executable, str(patcher), str(source), str(output)],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        return output.read_text(encoding="utf-8")
+
+
 def main() -> int:
     probe = read("tests/x64/vulkan_probe.c")
     build = read("tests/x64/build-vulkan-probe.sh")
@@ -43,6 +61,7 @@ def main() -> int:
     static_header = read("build/win32u-unix/vulkan_static_ios.h")
     ios_driver = read("build/win32u-unix/vulkan_driver_ios.c")
     driver_patcher = read("build/win32u-unix/patch_driver_vulkan.py")
+    patched_driver = exercise_driver_patcher()
 
     # Detroit's probes must be portable across developer Macs and must exercise
     # the Windows guest loader rather than accidentally bypass Wine.
@@ -138,15 +157,40 @@ def main() -> int:
         "client_surface_release",
     ):
         require(needle in ios_driver, f"iOS Vulkan driver contract missing: {needle}")
+
+    # The build must compile the WSI pieces, and the generated driver must carry
+    # a STRONG reference. A weak reference inside a static archive can be left
+    # unextracted by the linker, silently reverting to Wine's null Vulkan driver.
+    require("vulkan_driver_ios.c" in win32u_build,
+            "win32u build does not compile the iOS Vulkan user-driver")
+    require("vulkan_surface_ios.c" in win32u_build,
+            "win32u build does not compile the HWND -> CAMetalLayer adapter")
     require("patch_driver_vulkan.py" in win32u_build,
-            "win32u build no longer wires optional pVulkanInit into driver_ios.c")
-    require("pVulkanInit" in driver_patcher and "__attribute__((weak))" in driver_patcher,
-            "driver patcher must preserve non-Vulkan builds with a weak optional callback")
+            "win32u build no longer wires pVulkanInit into driver_ios.c")
+    require("__attribute__((weak))" not in driver_patcher,
+            "Vulkan-enabled driver patcher must not use a weak pVulkanInit reference")
+    require("__attribute__((weak))" not in patched_driver,
+            "generated Vulkan driver unexpectedly contains a weak pVulkanInit reference")
+    require("extern UINT winios_pVulkanInit" in patched_driver,
+            "generated Vulkan driver lacks strong pVulkanInit declaration")
+    require("winios_user_driver.pVulkanInit = winios_pVulkanInit" in patched_driver,
+            "generated Vulkan driver does not wire pVulkanInit")
+
+    # Reversibility: the source used by normal builds starts as the historical
+    # driver, and Detroit-only objects are removed before configuration so a
+    # previous Vulkan build cannot contaminate MADEIRA_VULKAN=0.
+    require('VULKAN_DRIVER_SOURCE="$BUILD_DIR/driver_ios.c"' in win32u_build,
+            "normal win32u build no longer defaults to the unpatched driver source")
+    for stale in ("vulkan_static_ios.o", "vulkan_driver_ios.o", "vulkan_surface_ios.o"):
+        require(stale in win32u_build and "rm -f" in win32u_build,
+                f"win32u build does not explicitly clean stale {stale}")
 
     print("PASS portable Windows Vulkan headless probe contract")
     print("PASS portable Windows Vulkan WSI probe contract")
     print("PASS static MoltenVK loader contract")
     print("PASS Wine iOS pVulkanInit / Metal-surface contract")
+    print("PASS strong static-link inclusion contract")
+    print("PASS reversible Vulkan-disabled build contract")
     print("PASS existing HWND -> CAMetalLayer path is reused")
     print("PASS Vulkan surface lifetime acquire/release contract")
     return 0
