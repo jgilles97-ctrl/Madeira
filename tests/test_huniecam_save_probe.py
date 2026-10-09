@@ -67,7 +67,13 @@ class HunieCamSaveProbeTests(unittest.TestCase):
             self.assertTrue(verify["save_tree_survived_relaunch"])
             self.assertTrue(verify["machine_gate_pass"])
             self.assertEqual(verify["after_tree_sha256"], verify["relaunch_tree_sha256"])
-            self.assertIn("manual", verify["manual_gate_still_required"].lower())
+            # Machine persistence is not enough: the game must visibly restore
+            # the same progress after relaunch. Assert that semantic requirement
+            # rather than depending on one exact sentence/word choice.
+            guidance = verify["manual_gate_still_required"].lower()
+            self.assertIn("relaunch", guidance)
+            self.assertIn("visible progress", guidance)
+            self.assertIn("matching files alone", guidance)
 
     def test_verify_fails_when_progress_was_not_written(self):
         with tempfile.TemporaryDirectory() as tmp:
