@@ -110,6 +110,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 libvulkan-dev
           mkdir -p /tmp/vulkan-headers
           cp -R /usr/include/vulkan /tmp/vulkan-headers/
+          cp -R /usr/include/vk_video /tmp/vulkan-headers/
       - name: Compile Windows x64 headless Vulkan probe
         env:
           X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
