@@ -34,6 +34,7 @@ jobs:
       - name: Run provenance and dependency guardrails
         run: >-
           python -m unittest -v
+          tests.test_huniecam_run_record
           tests.test_huniecam_run_context
           tests.test_huniecam_pe_imports
           tests.test_huniecam_native_modules
@@ -47,6 +48,7 @@ jobs:
           python -m unittest -v
           tests.test_huniecam_input_path_audit
           tests.test_huniecam_input_fallback
+          tests.test_huniecam_input_ab
           tests.test_huniecam_performance
           tests.test_huniecam_save_probe
           tests.test_huniecam_device_evidence
