@@ -42,9 +42,11 @@ jobs:
           tests.test_huniecam_evidence_manifest
           tests.test_huniecam_run_compare
           tests.test_huniecam_attempt_ledger
-      - name: Run device and final-acceptance guardrails
+      - name: Run touch, device and final-acceptance guardrails
         run: >-
           python -m unittest -v
+          tests.test_huniecam_input_path_audit
+          tests.test_huniecam_input_fallback
           tests.test_huniecam_performance
           tests.test_huniecam_save_probe
           tests.test_huniecam_device_evidence
