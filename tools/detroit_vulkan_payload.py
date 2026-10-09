@@ -135,7 +135,7 @@ def main() -> int:
         if cache_split != "1" or cache_patch != EXPECTED_IPAD_CACHE_PATCH:
             failures.append(
                 "MoltenVK is missing Madeira's audited iPad disk-cache/RAM-cache split; "
-                f"expected madeirа_ipad_cache_split=1 and madeirа_ipad_cache_patch={EXPECTED_IPAD_CACHE_PATCH}"
+                f"expected madeira_ipad_cache_split=1 and madeira_ipad_cache_patch={EXPECTED_IPAD_CACHE_PATCH}"
             )
         if ref and ref.lower() != expected_commit:
             warnings.append(
