@@ -13,7 +13,7 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V1"
+SCHEMA = "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V2"
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -68,6 +68,15 @@ def summary(kind: str, data: dict[str, Any] | None) -> dict[str, Any] | None:
     if kind == "ledger":
         attempts = data.get("attempts", [])
         return {"schema": data.get("schema"), "attempt_count": len(attempts), "best_stage": data.get("best_stage"), "best_attempt": data.get("best_attempt")}
+    if kind == "save_verification":
+        return {
+            "schema": data.get("schema"),
+            "progress_write_detected": data.get("progress_write_detected"),
+            "save_tree_survived_relaunch": data.get("save_tree_survived_relaunch"),
+            "machine_gate_pass": data.get("machine_gate_pass"),
+            "after_tree_sha256": data.get("after_tree_sha256"),
+            "relaunch_tree_sha256": data.get("relaunch_tree_sha256"),
+        }
     if kind.startswith("save"):
         return {"schema": data.get("schema"), "tree_sha256": data.get("tree_sha256"), "file_count": data.get("file_count"), "progress_write_detected": data.get("progress_write_detected")}
     if kind == "acceptance":
@@ -76,7 +85,7 @@ def summary(kind: str, data: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
-    structured_kinds = {"preflight", "session", "guard", "issues", "ledger", "save_after", "save_relaunch", "acceptance"}
+    structured_kinds = {"preflight", "session", "guard", "issues", "ledger", "save_before", "save_after", "save_relaunch", "save_verification", "acceptance"}
     files: list[dict[str, Any]] = []
     summaries: dict[str, Any] = {}
     for kind, path in inputs.items():
@@ -90,6 +99,7 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
     present = {f["kind"] for f in files}
     minimum_review = {"preflight", "session", "madeira_log"}.issubset(present)
     acceptance_complete = bool((summaries.get("acceptance") or {}).get("accepted"))
+    save_machine_complete = bool((summaries.get("save_verification") or {}).get("machine_gate_pass"))
     integrity_warnings = []
 
     guard = summaries.get("guard") or {}
@@ -104,6 +114,10 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
     if session and not session.get("deepest_stage") and "madeira_log" in present:
         integrity_warnings.append("A Madeira log is present but the structured session report proves no game stage; inspect whether the correct log was analyzed.")
 
+    save_verify = summaries.get("save_verification") or {}
+    if save_verify and save_verify.get("progress_write_detected") and not save_verify.get("save_tree_survived_relaunch"):
+        integrity_warnings.append("The game wrote save progress, but the exact post-progress save tree did not survive the relaunch. Save acceptance must fail until explained/fixed.")
+
     return {
         "schema": SCHEMA,
         "title": "HunieCam Studio",
@@ -111,6 +125,7 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
         "files": sorted(files, key=lambda x: x["kind"]),
         "summaries": summaries,
         "minimum_review_bundle_complete": minimum_review,
+        "save_machine_verification_complete": save_machine_complete,
         "device_acceptance_complete": acceptance_complete,
         "integrity_warnings": integrity_warnings,
         "privacy": {
@@ -125,7 +140,7 @@ def build(inputs: dict[str, pathlib.Path | None]) -> dict[str, Any]:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Build a HunieCam/Madeira evidence manifest")
-    for name in ("preflight", "session", "guard", "issues", "ledger", "save-after", "save-relaunch", "acceptance", "madeira-log", "unity-log"):
+    for name in ("preflight", "session", "guard", "issues", "ledger", "save-before", "save-after", "save-relaunch", "save-verification", "acceptance", "madeira-log", "unity-log"):
         p.add_argument(f"--{name}", dest=name.replace("-", "_"), type=pathlib.Path)
     p.add_argument("--json", dest="json_path", type=pathlib.Path, required=True)
     args = p.parse_args()
@@ -135,8 +150,10 @@ def main() -> int:
         "guard": args.guard,
         "issues": args.issues,
         "ledger": args.ledger,
+        "save_before": args.save_before,
         "save_after": args.save_after,
         "save_relaunch": args.save_relaunch,
+        "save_verification": args.save_verification,
         "acceptance": args.acceptance,
         "madeira_log": args.madeira_log,
         "unity_log": args.unity_log,
