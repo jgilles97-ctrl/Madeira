@@ -4,26 +4,37 @@ on:
   push:
     paths:
       - "tests/x64/vulkan_probe.c"
+      - "tests/x64/vulkan_device_gate.c"
+      - "app/Madeira/MadeiraApp.swift"
       - "tests/host/check-detroit-vulkan-capabilities.py"
+      - "tests/host/check-detroit-capability-proof.py"
       - ".github/workflows/detroit-vulkan-capability-tests.yml"
   pull_request:
     paths:
       - "tests/x64/vulkan_probe.c"
+      - "tests/x64/vulkan_device_gate.c"
+      - "app/Madeira/MadeiraApp.swift"
       - "tests/host/check-detroit-vulkan-capabilities.py"
+      - "tests/host/check-detroit-capability-proof.py"
       - ".github/workflows/detroit-vulkan-capability-tests.yml"
 
 permissions:
   contents: read
 
 jobs:
-  descriptor-indexing-contract:
+  detroit-capability-contract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - name: Compile capability contract
-        run: python -m py_compile tests/host/check-detroit-vulkan-capabilities.py
-      - name: Verify Detroit descriptor-indexing gate
+      - name: Compile capability contracts
+        run: >-
+          python -m py_compile
+          tests/host/check-detroit-vulkan-capabilities.py
+          tests/host/check-detroit-capability-proof.py
+      - name: Verify Detroit Vulkan capability gate
         run: python tests/host/check-detroit-vulkan-capabilities.py
+      - name: Verify durable physical capability proof
+        run: python tests/host/check-detroit-capability-proof.py
