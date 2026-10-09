@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "tests/x64/vulkan_device_gate.c"
 BUILDER = ROOT / "tests/x64/build-vulkan-device-gate.sh"
+SWAPCHAIN_PROBE = ROOT / "tests/x64/vulkan_swapchain_probe.c"
 ORCHESTRATOR = ROOT / "build/detroit-vulkan/build.sh"
 
 
@@ -35,6 +36,7 @@ def require_order(text: str, needles: list[str], label: str) -> None:
 def main() -> None:
     gate = GATE.read_text()
     builder = BUILDER.read_text()
+    swapchain = SWAPCHAIN_PROBE.read_text()
     orchestrator = ORCHESTRATOR.read_text()
 
     require(gate, '"vulkan_probe.exe"', "headless Vulkan canary")
@@ -56,6 +58,16 @@ def main() -> None:
     require(gate, "OVERALL=PASS", "success summary")
     require(gate, "PRESENTED_120_FRAMES=PASS", "120-frame success marker")
     require(gate, "NEXT_GATE=detroit-process-and-shader-compilation", "next-gate marker")
+
+    # Keep the baseline presentation proof display-paced. A 2026 MoltenVK
+    # drawable-lifetime report specifically reproduces with uncapped/immediate
+    # presentation. Detroit's first iPad target is 30 FPS, so an IMMEDIATE-mode
+    # stress test belongs in a separate optional diagnostic rather than in the
+    # pass/fail gate that decides whether we may move on to Detroit itself.
+    require(swapchain, "sci.presentMode = VK_PRESENT_MODE_FIFO_KHR", "FIFO presentation mode")
+    if "sci.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR" in swapchain:
+        raise AssertionError("physical baseline gate must not silently switch to immediate/uncapped presentation")
+    require(swapchain, "TARGET_FRAMES 120u", "120-frame presentation duration")
 
     # A zero exit code from every child is required before overall PASS.
     require(gate, "if (exit_code != 0)", "nonzero-child failure")
