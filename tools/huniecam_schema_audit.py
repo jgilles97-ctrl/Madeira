@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fail fast when HunieCam evidence-tool schemas drift out of sync.
+"""Fail fast when HunieCam evidence-tool schemas or input-mode contracts drift.
 
-Cycle 7 extends the explicit version matrix through Device Evidence V3,
-Acceptance V9, Manifest V6 and Pipeline V8 so the new drag/release gate cannot
-silently disappear in an older consumer.
+Cycle 8 tracks Pipeline V9, Acceptance V10, Manifest V7 and Acceptance Bundle V3.
+It also verifies that the producer, run-profile, pipeline, acceptance and manifest
+all agree on the same touch/diagnostic input-mode vocabulary.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 import huniecam_acceptance as acceptance
+import huniecam_acceptance_bundle as acceptance_bundle
 import huniecam_config_guard as config_guard
 import huniecam_device_evidence as device_evidence
 import huniecam_evidence_contract as evidence_contract
@@ -27,7 +28,7 @@ import huniecam_run_record as run_record
 import huniecam_save_probe as save_probe
 import huniecam_session_triage as session_triage
 
-SCHEMA = "MADEIRA_HUNIECAM_SCHEMA_AUDIT_V1"
+SCHEMA = "MADEIRA_HUNIECAM_SCHEMA_AUDIT_V2"
 CURRENT = {
     "preflight": probe.SCHEMA,
     "session": session_triage.SCHEMA,
@@ -46,6 +47,7 @@ CURRENT = {
     "acceptance": acceptance.SCHEMA,
     "manifest": evidence_manifest.SCHEMA,
     "pipeline": pipeline.SCHEMA,
+    "acceptance_bundle": acceptance_bundle.SCHEMA,
 }
 EXPECTED_CURRENT = {
     "preflight": "MADEIRA_HUNIECAM_PROBE_V4",
@@ -62,25 +64,39 @@ EXPECTED_CURRENT = {
     "save_verify": "MADEIRA_HUNIECAM_SAVE_VERIFY_V2",
     "repeatability": "MADEIRA_HUNIECAM_REPEATABILITY_V3",
     "contract": "MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4",
-    "acceptance": "MADEIRA_HUNIECAM_ACCEPTANCE_V9",
-    "manifest": "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V6",
-    "pipeline": "MADEIRA_HUNIECAM_PIPELINE_V8",
+    "acceptance": "MADEIRA_HUNIECAM_ACCEPTANCE_V10",
+    "manifest": "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V7",
+    "pipeline": "MADEIRA_HUNIECAM_PIPELINE_V9",
+    "acceptance_bundle": "MADEIRA_HUNIECAM_ACCEPTANCE_BUNDLE_V3",
 }
 
 def audit() -> dict[str, Any]:
     errors=[]
     for name,expected in EXPECTED_CURRENT.items():
         actual=CURRENT.get(name)
-        if actual!=expected:errors.append(f"Current {name} schema is {actual!r}; Cycle 7 expects {expected!r}. Update the version matrix deliberately rather than allowing silent drift.")
+        if actual!=expected:errors.append(f"Current {name} schema is {actual!r}; Cycle 8 expects {expected!r}. Update the version matrix deliberately rather than allowing silent drift.")
     contract_current={k:CURRENT[k] for k in ("preflight","session","guard","performance","run_record","run_context","pe_imports","native_modules","acceptance")}
     for kind,schema in contract_current.items():
         allowed=evidence_contract.SUPPORTED.get(kind,set())
         if schema not in allowed:errors.append(f"Evidence Contract {evidence_contract.SCHEMA} does not support current {kind} schema {schema}.")
     if repeatability.REQUIRED_CONTEXT_SCHEMA!=run_context.SCHEMA:errors.append(f"Repeatability requires {repeatability.REQUIRED_CONTEXT_SCHEMA}, but current run context is {run_context.SCHEMA}.")
     if getattr(acceptance,"DEVICE_SCHEMA",None)!=device_evidence.SCHEMA:errors.append(f"Acceptance requires device schema {getattr(acceptance,'DEVICE_SCHEMA',None)}, but current producer is {device_evidence.SCHEMA}.")
-    return {"schema":SCHEMA,"passed":not errors,"current":CURRENT,"expected_current":EXPECTED_CURRENT,"contract_supported":{k:sorted(v) for k,v in evidence_contract.SUPPORTED.items()},"errors":errors,"rule":"A producer schema bump must update this explicit current-version matrix and every consumer that relies on it. Silent schema drift is a CI failure."}
+
+    producer_touch=set(getattr(device_evidence,"TOUCH_INPUT_MODES",set()))
+    acceptance_touch=set(getattr(acceptance,"TOUCH_INPUT_MODES",set()))
+    manifest_touch=set(getattr(evidence_manifest,"TOUCH_INPUT_MODES",set()))
+    repeat_touch=set(getattr(repeatability,"FINAL_TOUCH_MODES",set()))
+    if not producer_touch:errors.append("Device evidence producer exposes no touch input-mode vocabulary.")
+    if not (producer_touch==acceptance_touch==manifest_touch==repeat_touch):errors.append(f"Touch-mode vocabulary drift: producer={sorted(producer_touch)}, acceptance={sorted(acceptance_touch)}, manifest={sorted(manifest_touch)}, repeatability={sorted(repeat_touch)}.")
+    run_modes=set(getattr(run_record,"INPUT_MODES",set()))
+    pipeline_modes=set(getattr(pipeline,"INPUT_MODES",()))
+    diagnostic_modes=set(getattr(device_evidence,"DIAGNOSTIC_INPUT_MODES",set()))
+    if not (run_modes==pipeline_modes==diagnostic_modes):errors.append(f"All input-mode vocabulary drift: run_record={sorted(run_modes)}, pipeline={sorted(pipeline_modes)}, device={sorted(diagnostic_modes)}.")
+    if not producer_touch.issubset(run_modes):errors.append("Touch acceptance modes are not all valid sealed run-profile modes.")
+
+    return {"schema":SCHEMA,"passed":not errors,"current":CURRENT,"expected_current":EXPECTED_CURRENT,"contract_supported":{k:sorted(v) for k,v in evidence_contract.SUPPORTED.items()},"input_modes":{"touch":sorted(producer_touch),"all":sorted(run_modes)},"errors":errors,"rule":"A producer schema bump or input-mode vocabulary change must update this explicit matrix and every consumer. Silent schema or interaction-profile drift is a CI failure."}
 def main()->int:
-    p=argparse.ArgumentParser(description="Audit HunieCam evidence schema synchronization");p.add_argument("--json",dest="json_path");args=p.parse_args();report=audit();text=json.dumps(report,indent=2,sort_keys=True)
+    p=argparse.ArgumentParser(description="Audit HunieCam evidence schema/input-mode synchronization");p.add_argument("--json",dest="json_path");args=p.parse_args();report=audit();text=json.dumps(report,indent=2,sort_keys=True)
     if args.json_path:
         from pathlib import Path
         Path(args.json_path).write_text(text+"\n",encoding="utf-8")
