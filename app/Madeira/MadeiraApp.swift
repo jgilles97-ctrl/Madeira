@@ -108,8 +108,9 @@ enum DetroitVulkanDeviceGateLauncher {
 
     /// Same deliberately simple fingerprint algorithm used by the x86-64
     /// Windows gate. It is an identity/check-for-staleness token, not a security
-    /// signature: changing any of the four executable bytes makes old physical
-    /// PASS proof invalid for the currently installed Madeira payload.
+    /// signature. The gate executable itself contains a deterministic identity
+    /// of the MoltenVK/Wine/FEX/iOS runtime built with it, so changing either a
+    /// canary OR that runtime changes this fingerprint and invalidates old proof.
     static func bundledPayloadFingerprint() throws -> UInt64 {
         guard let root = payloadRoot else { throw GateError.payloadFolderMissing }
         var hash = fnvOffset
@@ -201,7 +202,9 @@ enum DetroitVulkanDeviceGateLauncher {
         entry.performance = true
         entry.config = """
         env.MADEIRA_DEVICE_STATS = 1
+        env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3
         env.MVK_DTR_MSL_LIBRARY_CACHE = 0
+        env.MVK_DTR_MSL_LIBRARY_DISK_CACHE = 1
         """
 
         let library = LibraryModel.shared
@@ -252,14 +255,63 @@ enum DetroitVulkanDeviceGateLauncher {
 }
 
 /// Strict reader for proof emitted by the x86-64 Windows controller after the
-/// physical iPad actually presents 120 frames. Merely having a file is not
-/// enough: every PASS marker must agree and its exact payload fingerprint must
-/// match the four canaries bundled in this installed Madeira build.
+/// physical iPad actually presents 120 frames. Instead of collapsing every
+/// invalid state to false, expose a plain-language reason so the first physical
+/// device session says exactly what must happen next.
 @MainActor
 enum DetroitVulkanDeviceGateProof {
     static let schema = "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V2"
     static var url: URL {
         LibraryModel.drive.appendingPathComponent("madeira-detroit-vulkan-gate.txt", isDirectory: false)
+    }
+
+    enum Status: Equatable {
+        case passed
+        case notRun
+        case foregroundLost
+        case malformedProof
+        case wrongSchema
+        case wrongArchitecture
+        case notPhysicalDevice
+        case incompletePass
+        case currentPayloadUnreadable
+        case payloadChanged
+
+        var passed: Bool { self == .passed }
+
+        var buttonTitle: String {
+            switch self {
+            case .passed: return "Detroit graphics test — Passed"
+            case .payloadChanged: return "Detroit graphics test — Rerun needed"
+            case .foregroundLost: return "Detroit graphics test — Rerun in foreground"
+            default: return "Detroit graphics test"
+            }
+        }
+
+        var explanation: String {
+            switch self {
+            case .passed:
+                return "Passed on this iPad with this exact local graphics runtime."
+            case .notRun:
+                return "Not yet proven on this iPad. Run the graphics test before launching Detroit."
+            case .foregroundLost:
+                return "The previous test left the foreground, so its result cannot qualify Detroit. Run it again and keep Madeira open."
+            case .malformedProof:
+                return "The previous test proof is damaged or incomplete. Run the graphics test again."
+            case .wrongSchema:
+                return "The saved proof is from an older test format. Run the current graphics test again."
+            case .wrongArchitecture:
+                return "The saved proof did not come from the required x86-64 Windows test path. Run the current graphics test again."
+            case .notPhysicalDevice:
+                return "The saved proof does not confirm a fully local physical-iPad run. Run the graphics test on this iPad."
+            case .incompletePass:
+                return "The saved proof is missing one or more required graphics passes. Run the test again and inspect the first failed stage."
+            case .currentPayloadUnreadable:
+                return "Madeira cannot verify the test/runtime files bundled in this app. Rebuild the Detroit Vulkan runtime."
+            case .payloadChanged:
+                return "The local graphics runtime changed since the last pass. Rerun the test so the new runtime is physically proven."
+            }
+        }
     }
 
     private static func fields() -> [String: String]? {
@@ -277,21 +329,31 @@ enum DetroitVulkanDeviceGateProof {
         return result
     }
 
-    static var validForCurrentPayload: Bool {
-        guard !FileManager.default.fileExists(atPath: DetroitVulkanDeviceGateLauncher.foregroundInvalidationURL.path),
-              let values = fields(),
-              values["SCHEMA"] == schema,
-              values["ARCH"] == "x86_64-windows",
-              values["EXECUTION"] == "physical-device-local",
-              values["FOREGROUND_INTEGRITY"] == "PASS",
+    static var status: Status {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: DetroitVulkanDeviceGateLauncher.foregroundInvalidationURL.path) {
+            return .foregroundLost
+        }
+        guard fm.fileExists(atPath: url.path) else { return .notRun }
+        guard let values = fields() else { return .malformedProof }
+        guard values["SCHEMA"] == schema else { return .wrongSchema }
+        guard values["ARCH"] == "x86_64-windows" else { return .wrongArchitecture }
+        guard values["EXECUTION"] == "physical-device-local" else { return .notPhysicalDevice }
+        guard values["FOREGROUND_INTEGRITY"] == "PASS",
               values["VULKAN_DEVICE"] == "PASS",
               values["WIN32_SURFACE"] == "PASS",
               values["PRESENTED_120_FRAMES"] == "PASS",
               values["OVERALL"] == "PASS",
               values["NEXT_GATE"] == "detroit-process-and-shader-compilation",
-              let expected = try? DetroitVulkanDeviceGateLauncher.bundledPayloadFingerprint() else { return false }
-        return values["PAYLOAD_FNV64"]?.lowercased() == String(format: "%016llx", expected)
+              let recorded = values["PAYLOAD_FNV64"]?.lowercased() else { return .incompletePass }
+        guard let expected = try? DetroitVulkanDeviceGateLauncher.bundledPayloadFingerprint() else {
+            return .currentPayloadUnreadable
+        }
+        guard recorded == String(format: "%016llx", expected) else { return .payloadChanged }
+        return .passed
     }
+
+    static var validForCurrentPayload: Bool { status.passed }
 }
 
 private struct DetroitVulkanDeviceGateButton: View {
@@ -302,16 +364,23 @@ private struct DetroitVulkanDeviceGateButton: View {
            library.enabled,
            library.current == nil,
            !library.launching {
-            let passed = DetroitVulkanDeviceGateProof.validForCurrentPayload
-            Button(action: DetroitVulkanDeviceGateLauncher.launch) {
-                Label(passed ? "Detroit graphics test — Passed" : "Detroit graphics test",
-                      systemImage: passed ? "checkmark.shield.fill" : "checkmark.shield")
+            let status = DetroitVulkanDeviceGateProof.status
+            VStack(alignment: .trailing, spacing: 6) {
+                Button(action: DetroitVulkanDeviceGateLauncher.launch) {
+                    Label(status.buttonTitle,
+                          systemImage: status.passed ? "checkmark.shield.fill" : "checkmark.shield")
+                }
+                .buttonStyle(.borderedProminent)
+                Text(status.explanation)
+                    .font(.caption)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 360, alignment: .trailing)
+                    .accessibilityLabel(status.explanation)
             }
-            .buttonStyle(.borderedProminent)
             .padding(16)
-            .accessibilityHint(passed
-                ? "This exact test payload passed the local Vulkan, Windows surface, and 120-frame checks on this iPad. Tap to run it again."
-                : "Runs the local Vulkan, Windows surface, and 120-frame graphics checks on this iPad. Keep Madeira in the foreground until it finishes.")
+            .accessibilityHint(status.passed
+                ? "Tap to repeat the local graphics qualification."
+                : "Tap to run the local Vulkan, Windows surface, and 120-frame checks. Keep Madeira in the foreground until it finishes.")
         }
     }
 }
