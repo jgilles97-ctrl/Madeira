@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Lint a HunieCam/Madeira experiment before it reaches the iPad.
 
-The guard is intentionally conservative: the clean title profile is the default,
-and each diagnostic run may change at most one compatibility variable. Known-bad
-Unity-Mono experiments from upstream Madeira reports are rejected.
+The clean profile has no renderer override. Each diagnostic run may change at
+most one compatibility variable. Known-bad Unity-Mono experiments are rejected
+and speculative renderer forcing is not allowed into the baseline by habit.
 """
 from __future__ import annotations
 
@@ -14,18 +14,14 @@ import re
 import shlex
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_CONFIG_GUARD_V1"
+SCHEMA = "MADEIRA_HUNIECAM_CONFIG_GUARD_V2"
 
-# These are the only title-specific experiments our evidence workflow currently
-# knows how to justify. New ones must be added deliberately with a reason/test.
 KNOWN_CONFIG_EXPERIMENTS = {
     "d3d9": {"native"},
     "env.MADEIRA_WOW_RWX_PLAIN": {"1"},
 }
 KNOWN_ARGUMENT_EXPERIMENTS = {"-force-d3d9"}
 
-# Issue #123 explicitly ruled these out for Unity Mono. Accept common spellings
-# so copy/pasted old Madeira advice cannot silently re-enter the profile.
 FORBIDDEN_CONFIG_PATTERNS = (
     (re.compile(r"^(?:env\.)?MADEIRA_MONO_SUSPEND$", re.I), {"hybrid"},
      "Unity Mono is known to abort with hybrid suspend in Madeira issue #123."),
@@ -47,9 +43,9 @@ DISCOURAGED_CONFIG_PATTERNS = (
 )
 
 FORBIDDEN_ARGUMENTS = {
-    "-force-opengl": "HunieCam's controlled renderer baseline is Direct3D 9, not OpenGL.",
-    "-force-d3d11": "HunieCam's controlled renderer baseline is Direct3D 9.",
-    "-force-vulkan": "HunieCam's Unity 5.3-era Windows build is not being tested through Vulkan.",
+    "-force-opengl": "The clean HunieCam profile does not force a renderer. Observe the owned build's Unity log first; OpenGL is not an evidence-backed experiment here.",
+    "-force-d3d11": "The clean HunieCam profile does not force D3D11. A clean D3D11 selection is allowed when Unity chooses it naturally, but forcing it is not part of the evidence plan.",
+    "-force-vulkan": "The clean HunieCam profile does not force a renderer, and this Unity 5.3-era Windows build has no evidence-backed Vulkan experiment in the Madeira plan.",
 }
 
 
@@ -119,8 +115,6 @@ def inspect(config_text: str, arguments: str) -> dict[str, Any]:
         if low in KNOWN_ARGUMENT_EXPERIMENTS:
             changes.append({"kind": "argument", "name": low, "value": "1"})
         elif low.startswith("-"):
-            # Arguments with values are intentionally reported individually; the
-            # guard's goal is to make hidden launch tweaks visible.
             changes.append({"kind": "argument", "name": low, "value": "1"})
             if low not in FORBIDDEN_ARGUMENTS:
                 unknown.append({"line": "argument", "key": token, "value": "", "raw": token})
@@ -137,13 +131,7 @@ def inspect(config_text: str, arguments: str) -> dict[str, Any]:
             "message": "One or more config/argument changes are not in the HunieCam evidence plan. Treat them as unreviewed rather than carrying them forward by habit.",
         })
 
-    if failures:
-        status = "FAIL"
-    elif warnings:
-        status = "WARN"
-    else:
-        status = "PASS"
-
+    status = "FAIL" if failures else "WARN" if warnings else "PASS"
     experiment = "clean baseline"
     if len(changes) == 1:
         change = changes[0]
@@ -164,11 +152,17 @@ def inspect(config_text: str, arguments: str) -> dict[str, Any]:
         "baseline": {
             "config": "",
             "arguments": "",
+            "renderer_override": None,
             "resolution": "1280x720",
             "display": "fit",
             "fps": 60,
         },
-        "rule": "Use the clean baseline unless real run evidence justifies one controlled compatibility change.",
+        "conditional_experiment_rules": {
+            "-force-d3d9": "Only after D3D11 is tied to a graphics failure/crash, or graphics init fails before an API is proven.",
+            "d3d9=native": "Only after D3D9 is proven active and the remaining failure is graphics-specific.",
+            "MADEIRA_WOW_RWX_PLAIN=1": "Only for real protected-memory store evidence with HunieCam's bundled Unity Mono loaded; never for the 0xd4200000 breakpoint family.",
+        },
+        "rule": "Clean means no renderer override. Use one evidence-backed compatibility change at a time and roll it back if it does not produce a measurable benefit.",
     }
 
 
