@@ -1,0 +1,35 @@
+name: Detroit physical device report tests
+
+on:
+  push:
+    paths:
+      - "tools/detroit_device_report.py"
+      - "tests/host/check-detroit-device-report.py"
+      - ".github/workflows/detroit-device-report-tests.yml"
+  pull_request:
+    paths:
+      - "tools/detroit_device_report.py"
+      - "tests/host/check-detroit-device-report.py"
+      - ".github/workflows/detroit-device-report-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  report-fixtures:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile report parser and fixtures
+        run: >-
+          python -m py_compile
+          tools/detroit_device_report.py
+          tests/host/check-detroit-device-report.py
+      - name: Run physical-device report fixtures
+        run: python tests/host/check-detroit-device-report.py

@@ -1,0 +1,244 @@
+name: Detroit readiness tests
+
+on:
+  push:
+    paths:
+      - "tools/detroit_readiness.py"
+      - "tools/detroit_vulkan_payload.py"
+      - "tools/detroit_memory_report.py"
+      - "tests/host/check-detroit-readiness.py"
+      - "tests/host/check-detroit-vulkan-contract.py"
+      - "tests/host/check-detroit-vulkan-payload.py"
+      - "tests/host/check-detroit-winevulkan-contract.py"
+      - "tests/host/check-detroit-memory-report.py"
+      - "tests/host/check-detroit-device-gate.py"
+      - "tests/host/check-detroit-moltenvk-build.py"
+      - "tests/host/check-detroit-moltenvk-cache-split.py"
+      - "tests/ios/memory_headroom_probe.c"
+      - "tests/x64/vulkan_probe.c"
+      - "tests/x64/vulkan_wsi_probe.c"
+      - "tests/x64/vulkan_swapchain_probe.c"
+      - "tests/x64/vulkan_device_gate.c"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/build-vulkan-wsi-probe.sh"
+      - "tests/x64/build-vulkan-swapchain-probe.sh"
+      - "tests/x64/build-vulkan-device-gate.sh"
+      - "build/detroit-vulkan/build.sh"
+      - "build/moltenvk-ios/build.sh"
+      - "build/moltenvk-ios/patch_detroit_ipad_cache.py"
+      - "build/ntdll-unix/build.sh"
+      - "build/ntdll-unix/patch_virtual_winevulkan.py"
+      - "build/ntdll-unix/vulkan_surface_ios.c"
+      - "build/ntdll-unix/vulkan_surface_ios.h"
+      - "build/win32u-unix/build.sh"
+      - "build/win32u-unix/vulkan_static_ios.c"
+      - "build/win32u-unix/vulkan_static_ios.h"
+      - "build/win32u-unix/vulkan_driver_ios.c"
+      - "build/win32u-unix/patch_driver_vulkan.py"
+      - "build/win32u-unix/driver_ios.c"
+      - "build/wine-pe/build-modules.sh"
+      - "app/Madeira/IOSDisplayShim.m"
+      - "app/Madeira/FEXBridge.h"
+      - "app/Madeira/FEXBridge.mm"
+      - "app/Madeira/Madeira-Bridging-Header.h"
+      - "app/Madeira/MadeiraApp.swift"
+      - "docs/DETROIT.md"
+      - "docs/detroit-m4-8gb.cfg"
+      - ".github/workflows/detroit-readiness-tests.yml"
+  pull_request:
+    paths:
+      - "tools/detroit_readiness.py"
+      - "tools/detroit_vulkan_payload.py"
+      - "tools/detroit_memory_report.py"
+      - "tests/host/check-detroit-readiness.py"
+      - "tests/host/check-detroit-vulkan-contract.py"
+      - "tests/host/check-detroit-vulkan-payload.py"
+      - "tests/host/check-detroit-winevulkan-contract.py"
+      - "tests/host/check-detroit-memory-report.py"
+      - "tests/host/check-detroit-device-gate.py"
+      - "tests/host/check-detroit-moltenvk-build.py"
+      - "tests/host/check-detroit-moltenvk-cache-split.py"
+      - "tests/ios/memory_headroom_probe.c"
+      - "tests/x64/vulkan_probe.c"
+      - "tests/x64/vulkan_wsi_probe.c"
+      - "tests/x64/vulkan_swapchain_probe.c"
+      - "tests/x64/vulkan_device_gate.c"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/build-vulkan-wsi-probe.sh"
+      - "tests/x64/build-vulkan-swapchain-probe.sh"
+      - "tests/x64/build-vulkan-device-gate.sh"
+      - "build/detroit-vulkan/build.sh"
+      - "build/moltenvk-ios/build.sh"
+      - "build/moltenvk-ios/patch_detroit_ipad_cache.py"
+      - "build/ntdll-unix/build.sh"
+      - "build/ntdll-unix/patch_virtual_winevulkan.py"
+      - "build/ntdll-unix/vulkan_surface_ios.c"
+      - "build/ntdll-unix/vulkan_surface_ios.h"
+      - "build/win32u-unix/build.sh"
+      - "build/win32u-unix/vulkan_static_ios.c"
+      - "build/win32u-unix/vulkan_static_ios.h"
+      - "build/win32u-unix/vulkan_driver_ios.c"
+      - "build/win32u-unix/patch_driver_vulkan.py"
+      - "build/win32u-unix/driver_ios.c"
+      - "build/wine-pe/build-modules.sh"
+      - "app/Madeira/IOSDisplayShim.m"
+      - "app/Madeira/FEXBridge.h"
+      - "app/Madeira/FEXBridge.mm"
+      - "app/Madeira/Madeira-Bridging-Header.h"
+      - "app/Madeira/MadeiraApp.swift"
+      - "docs/DETROIT.md"
+      - "docs/detroit-m4-8gb.cfg"
+      - ".github/workflows/detroit-readiness-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile Python checks
+        run: >-
+          python -m py_compile
+          tools/detroit_readiness.py
+          tools/detroit_vulkan_payload.py
+          tools/detroit_memory_report.py
+          tests/host/check-detroit-readiness.py
+          tests/host/check-detroit-vulkan-contract.py
+          tests/host/check-detroit-vulkan-payload.py
+          tests/host/check-detroit-winevulkan-contract.py
+          tests/host/check-detroit-memory-report.py
+          tests/host/check-detroit-device-gate.py
+          tests/host/check-detroit-moltenvk-build.py
+          tests/host/check-detroit-moltenvk-cache-split.py
+          build/moltenvk-ios/patch_detroit_ipad_cache.py
+          build/win32u-unix/patch_driver_vulkan.py
+          build/ntdll-unix/patch_virtual_winevulkan.py
+      - name: Validate shell syntax
+        run: |
+          bash -n build/detroit-vulkan/build.sh
+          bash -n build/moltenvk-ios/build.sh
+          bash -n build/ntdll-unix/build.sh
+          bash -n build/win32u-unix/build.sh
+          bash -n tests/x64/build-vulkan-probe.sh
+          bash -n tests/x64/build-vulkan-wsi-probe.sh
+          bash -n tests/x64/build-vulkan-swapchain-probe.sh
+          bash -n tests/x64/build-vulkan-device-gate.sh
+      - name: Detroit readiness fixtures
+        run: python tests/host/check-detroit-readiness.py
+      - name: Detroit Vulkan payload fixtures
+        run: python tests/host/check-detroit-vulkan-payload.py
+      - name: Detroit Wine Vulkan packaging contract
+        run: python tests/host/check-detroit-winevulkan-contract.py
+      - name: Detroit memory report fixtures
+        run: python tests/host/check-detroit-memory-report.py
+      - name: Detroit Vulkan contract
+        run: python tests/host/check-detroit-vulkan-contract.py
+      - name: Detroit physical-device gate contract
+        run: python tests/host/check-detroit-device-gate.py
+      - name: Detroit MoltenVK iOS build contract
+        run: python tests/host/check-detroit-moltenvk-build.py
+      - name: Detroit MoltenVK 8 GB cache-split contract
+        run: python tests/host/check-detroit-moltenvk-cache-split.py
+      - name: Exercise deterministic win32u driver patch
+        run: |
+          python build/win32u-unix/patch_driver_vulkan.py \
+            build/win32u-unix/driver_ios.c /tmp/driver_ios_vulkan.c
+          grep -q 'extern UINT winios_pVulkanInit' /tmp/driver_ios_vulkan.c
+          grep -q 'winios_user_driver.pVulkanInit = winios_pVulkanInit' /tmp/driver_ios_vulkan.c
+          python - <<'PY'
+          import pathlib, re
+          text = pathlib.Path('/tmp/driver_ios_vulkan.c').read_text()
+          match = re.search(r'extern\s+UINT\s+winios_pVulkanInit\s*\([^;]+;', text, re.S)
+          if not match:
+              raise SystemExit('missing pVulkanInit declaration')
+          if 'weak' in match.group(0):
+              raise SystemExit('pVulkanInit must be a strong static-link reference')
+          PY
+      - name: Exercise winevulkan unixlib registry patch
+        run: |
+          python build/ntdll-unix/patch_virtual_winevulkan.py \
+            build/ntdll-unix/virtual_ios.c /tmp/virtual_ios_vulkan.c
+          grep -q 'extern const void \*winevulkan_unix_call_funcs\[\]' /tmp/virtual_ios_vulkan.c
+          grep -q 'funcs64 = (const void \*)winevulkan_unix_call_funcs' /tmp/virtual_ios_vulkan.c
+          grep -q 'funcs_wow64 = (const void \*)winevulkan_unix_call_wow64_funcs' /tmp/virtual_ios_vulkan.c
+      - name: Compile platform-neutral Vulkan WSI helper
+        run: >-
+          cc -std=c11 -O2 -Wall -Wextra -Werror -fPIC
+          -Ibuild/ntdll-unix
+          -c build/ntdll-unix/vulkan_surface_ios.c
+          -o /tmp/vulkan_surface_ios.o
+
+  windows-guest-probes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cross compiler and isolate Vulkan headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 libvulkan-dev
+          mkdir -p /tmp/vulkan-headers
+          cp -R /usr/include/vulkan /tmp/vulkan-headers/
+          cp -R /usr/include/vk_video /tmp/vulkan-headers/
+      - name: Compile Windows x64 headless Vulkan probe
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_PROBE_OUT: /tmp/vulkan_probe.exe
+        run: bash tests/x64/build-vulkan-probe.sh
+      - name: Compile Windows x64 WSI Vulkan probe
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_WSI_PROBE_OUT: /tmp/vulkan_wsi_probe.exe
+        run: bash tests/x64/build-vulkan-wsi-probe.sh
+      - name: Compile Windows x64 swapchain Vulkan probe
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_SWAPCHAIN_PROBE_OUT: /tmp/vulkan_swapchain_probe.exe
+        run: bash tests/x64/build-vulkan-swapchain-probe.sh
+      - name: Compile one-command Windows x64 device gate
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_DEVICE_GATE_OUT: /tmp/vulkan-device-gate-x64.exe
+        run: bash tests/x64/build-vulkan-device-gate.sh
+      - name: Verify PE artifacts
+        run: |
+          file /tmp/vulkan_probe.exe /tmp/vulkan_wsi_probe.exe /tmp/vulkan_swapchain_probe.exe /tmp/vulkan-device-gate-x64.exe
+          file /tmp/vulkan_probe.exe | grep -qi 'PE32+'
+          file /tmp/vulkan_wsi_probe.exe | grep -qi 'PE32+'
+          file /tmp/vulkan_swapchain_probe.exe | grep -qi 'PE32+'
+          file /tmp/vulkan-device-gate-x64.exe | grep -qi 'PE32+'
+          grep -aqF 'MADEIRA_DETROIT_RUNTIME_BUILD_ID=standalone-unbound' /tmp/vulkan-device-gate-x64.exe
+
+  ios-api-canaries:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Parse Detroit Swift qualification UI
+        run: xcrun --sdk iphoneos swiftc -parse -target arm64-apple-ios17.0 app/Madeira/MadeiraApp.swift
+      - name: Compile iPhoneOS memory headroom canary
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+            -std=c11 -Wall -Wextra -Werror \
+            -c tests/ios/memory_headroom_probe.c \
+            -o /tmp/memory_headroom_probe.o
+      - name: Compile iPhoneOS Vulkan surface lifetime helper
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+            -std=c11 -Wall -Wextra -Werror -fPIC \
+            -Ibuild/ntdll-unix \
+            -c build/ntdll-unix/vulkan_surface_ios.c \
+            -o /tmp/vulkan_surface_ios.o

@@ -1,0 +1,81 @@
+name: Detroit compute writeback integrity tests
+
+on:
+  push:
+    paths:
+      - "tests/x64/vulkan_probe.c"
+      - "tests/x64/patch-detroit-descriptor-features.py"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/vulkan_compute_writeback_probe.c"
+      - "tests/x64/build-vulkan-compute-writeback-probe.sh"
+      - "tests/host/check-detroit-compute-writeback.py"
+      - "docs/detroit-m4-8gb.cfg"
+      - "build/detroit-vulkan/build.sh"
+      - ".github/workflows/detroit-compute-writeback-tests.yml"
+  pull_request:
+    paths:
+      - "tests/x64/vulkan_probe.c"
+      - "tests/x64/patch-detroit-descriptor-features.py"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "tests/x64/vulkan_compute_writeback_probe.c"
+      - "tests/x64/build-vulkan-compute-writeback-probe.sh"
+      - "tests/host/check-detroit-compute-writeback.py"
+      - "docs/detroit-m4-8gb.cfg"
+      - "build/detroit-vulkan/build.sh"
+      - ".github/workflows/detroit-compute-writeback-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Compile Python contracts
+        run: >-
+          python -m py_compile
+          tests/x64/patch-detroit-descriptor-features.py
+          tests/host/check-detroit-compute-writeback.py
+      - name: Verify compute writeback qualification contract
+        run: python tests/host/check-detroit-compute-writeback.py
+      - name: Verify shell syntax
+        run: |
+          bash -n tests/x64/build-vulkan-probe.sh
+          bash -n tests/x64/build-vulkan-compute-writeback-probe.sh
+          bash -n build/detroit-vulkan/build.sh
+
+  windows-x64-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install MinGW and isolate Vulkan headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 libvulkan-dev
+          mkdir -p /tmp/vulkan-headers
+          cp -R /usr/include/vulkan /tmp/vulkan-headers/
+          cp -R /usr/include/vk_video /tmp/vulkan-headers/
+      - name: Build integrated Detroit capability plus compute canary
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_PROBE_OUT: /tmp/vulkan_probe.exe
+        run: bash tests/x64/build-vulkan-probe.sh
+      - name: Build standalone compute debugger
+        env:
+          X86_64_W64_MINGW32_CLANG: /usr/bin/x86_64-w64-mingw32-gcc
+          VULKAN_HEADERS: /tmp/vulkan-headers
+          VULKAN_COMPUTE_WRITEBACK_PROBE_OUT: /tmp/vulkan_compute_writeback_probe.exe
+        run: bash tests/x64/build-vulkan-compute-writeback-probe.sh
+      - name: Verify Windows PE outputs and embedded integrity markers
+        run: |
+          file /tmp/vulkan_probe.exe /tmp/vulkan_compute_writeback_probe.exe
+          file /tmp/vulkan_probe.exe | grep -qi 'PE32+'
+          file /tmp/vulkan_compute_writeback_probe.exe | grep -qi 'PE32+'
+          grep -aqF 'DETROIT_COMPUTE_WRITEBACK=PASS' /tmp/vulkan_probe.exe
+          grep -aqF 'MOLTENVK_ARGUMENT_BUFFER_COMPUTE_INTEGRITY=PASS' /tmp/vulkan_probe.exe
+          grep -aqF 'MOLTENVK_ARGUMENT_BUFFER_COMPUTE_INTEGRITY=PASS' /tmp/vulkan_compute_writeback_probe.exe

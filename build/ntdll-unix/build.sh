@@ -8,8 +8,32 @@ WINE_BUILD="$WINE_SRC/build-macos"
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 APP_LIB="$REPO_ROOT/app/Madeira/libntdll_unix.a"
+PYTHON="${PYTHON:-python3}"
+MOLTENVK_PREFIX="${MOLTENVK_IOS_PREFIX:-$REPO_ROOT/toolchains/moltenvk-detroit-ios}"
+VULKAN_MODE="${MADEIRA_VULKAN:-auto}"
+VULKAN_ENABLED=0
+VIRTUAL_SOURCE="$BUILD_DIR/virtual_ios.c"
+VULKAN_OBJS=()
 
 mkdir -p "$OBJ_DIR"
+
+# Keep the ntdll unixlib build in lockstep with win32u's Vulkan switch. Wine's
+# winevulkan.dll has a native unix half; on iOS that code must live inside the
+# single app process instead of being dlopened as winevulkan.so.
+if [ "$VULKAN_MODE" != "0" ]; then
+    if [ -f "$MOLTENVK_PREFIX/lib/libMoltenVK.a" ] && \
+       [ -f "$MOLTENVK_PREFIX/include/vulkan/vulkan.h" ]; then
+        VULKAN_ENABLED=1
+    elif [ "$VULKAN_MODE" = "1" ]; then
+        echo "error: MADEIRA_VULKAN=1 but MoltenVK iOS staging is incomplete" >&2
+        echo "run: build/moltenvk-ios/build.sh" >&2
+        exit 2
+    fi
+fi
+
+# Never let enabled-build objects leak into a later MADEIRA_VULKAN=0 archive.
+rm -f "$OBJ_DIR/winevulkan_vulkan.o" "$OBJ_DIR/winevulkan_thunks.o" \
+      "$OBJ_DIR/virtual_ios_vulkan.c"
 
 SUCCEEDED=0
 FAILED=0
@@ -144,6 +168,29 @@ compile_unixlib "$BUILD_DIR/dnsapi_unixlib_ios.c" "dnsapi_unixlib" "dnsapi" \
 FFMPEG_PREFIX="$REPO_ROOT/toolchains/ffmpeg-ios"
 compile_unixlib "$BUILD_DIR/winegstreamer_unixlib_ios.c" "winegstreamer_unixlib" "winegstreamer" \
     -I"$WINE_SRC/dlls/winegstreamer" -I"$FFMPEG_PREFIX/include"
+
+# Detroit/Vulkan: winevulkan.dll's unix half contains the real Wine Vulkan ICD
+# implementation and its large generated thunk table. On macOS Wine loads it as
+# winevulkan.so; a jailed iOS app cannot, so compile both unix translation units
+# into libntdll_unix.a and register their renamed call table in a generated copy
+# of virtual_ios.c. This is separate from win32u's host Vulkan/MoltenVK driver.
+if [ "$VULKAN_ENABLED" -eq 1 ]; then
+    echo "=== Building winevulkan unixlib ==="
+    compile_unixlib "$WINE_SRC/dlls/winevulkan/vulkan.c" \
+        "winevulkan_vulkan" "winevulkan" \
+        -I"$WINE_SRC/dlls/winevulkan" -I"$WINE_BUILD/dlls/winevulkan"
+    compile_unixlib "$WINE_SRC/dlls/winevulkan/vulkan_thunks.c" \
+        "winevulkan_thunks" "winevulkan" \
+        -I"$WINE_SRC/dlls/winevulkan" -I"$WINE_BUILD/dlls/winevulkan"
+    VULKAN_OBJS+=("$OBJ_DIR/winevulkan_vulkan.o" "$OBJ_DIR/winevulkan_thunks.o")
+
+    VIRTUAL_SOURCE="$OBJ_DIR/virtual_ios_vulkan.c"
+    "$PYTHON" "$BUILD_DIR/patch_virtual_winevulkan.py" \
+        "$BUILD_DIR/virtual_ios.c" "$VIRTUAL_SOURCE"
+else
+    echo "winevulkan unixlib: disabled"
+fi
+
 # MADEIRA ml1990: the wg_parser's H.264/HEVC (VideoToolbox) and AAC
 # (AudioToolbox) decoders.  Its own translation unit with NO Wine header --
 # CoreFoundation and winnt.h disagree about several names -- so it is compiled
@@ -184,7 +231,7 @@ for src in $WINE_SRC/dlls/ntdll/unix/*.c; do
             compile_one "$BUILD_DIR/cdrom_stub.c" "cdrom"
             ;;
         virtual)
-            compile_one "$BUILD_DIR/virtual_ios.c" "virtual"
+            compile_one "$VIRTUAL_SOURCE" "virtual"
             ;;
         signal_arm64)
             compile_one "$BUILD_DIR/signal_arm64_ios.c" "signal_arm64"
@@ -203,6 +250,10 @@ echo "Results: $SUCCEEDED succeeded, $FAILED failed"
 if [ -n "$FAILED_FILES" ]; then
     echo "Failed:$FAILED_FILES"
 fi
+if [ $FAILED -gt 0 ]; then
+    echo "(not linking — errors in $OBJ_DIR/<name>.err)"
+    exit 1
+fi
 
 echo ""
 echo "=== Building libntdll_unix.a ==="
@@ -213,6 +264,7 @@ ar rcs "$OBJ_DIR/libntdll_unix.a" \
     "$OBJ_DIR/bcrypt_unixlib.o" "$OBJ_DIR/secur32_unixlib.o" "$OBJ_DIR/crypt32_unixlib.o" \
     "$OBJ_DIR/dwrite_unixlib.o" "$OBJ_DIR/dnsapi_unixlib.o" \
     "$OBJ_DIR/winegstreamer_unixlib.o" "$OBJ_DIR/wg_parser_apple_ios.o" \
+    "${VULKAN_OBJS[@]}" \
     "$OBJ_DIR/cdrom.o" "$OBJ_DIR/debug.o" "$OBJ_DIR/env.o" "$OBJ_DIR/file.o" \
     "$OBJ_DIR/loader.o" "$OBJ_DIR/loadorder.o" "$OBJ_DIR/process.o" "$OBJ_DIR/registry.o" \
     "$OBJ_DIR/security.o" "$OBJ_DIR/serial.o" "$OBJ_DIR/server.o" \
@@ -223,4 +275,7 @@ ar rcs "$OBJ_DIR/libntdll_unix.a" \
 echo "Copying to app..."
 cp "$OBJ_DIR/libntdll_unix.a" "$APP_LIB"
 echo "libntdll_unix.a: $(wc -c < "$APP_LIB" | tr -d ' ') bytes"
+if [ "$VULKAN_ENABLED" -eq 1 ]; then
+    echo "Detroit winevulkan unix call table: staged into libntdll_unix.a"
+fi
 echo "Done!"
