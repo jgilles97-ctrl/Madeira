@@ -1,13 +1,15 @@
 /*
- * vulkan_probe.c - minimal Windows x64 Vulkan canary for Madeira.
+ * vulkan_probe.c - Windows x64 Vulkan/Detroit capability canary for Madeira.
  *
- * This program deliberately does not link to vulkan-1.lib.  It loads the
+ * This program deliberately does not link to vulkan-1.lib. It loads the
  * Windows Vulkan loader exactly the way a real game can, so a PASS proves
- * that vulkan-1.dll is present and can reach Wine's Vulkan implementation.
+ * vulkan-1.dll is present and can reach Wine's Vulkan implementation.
  *
- * Build with tests/x64/build-vulkan-probe.sh, then run through the same
- * FEX/Wine launch path used by games.  The output is intentionally plain text
- * and machine-readable enough to archive with device-test evidence.
+ * Detroit relies on VK_EXT_descriptor_indexing for its resource-array/bindless
+ * renderer. This probe therefore treats that extension as a hard pre-game
+ * capability: it must be advertised and successfully enabled on VkDevice.
+ * Individual descriptor-indexing feature bits are printed for device evidence;
+ * we do not invent stricter per-bit requirements without game evidence.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -19,7 +21,7 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 
-#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V1"
+#define PROBE_SCHEMA "MADEIRA_VK_PROBE_V2"
 
 static int has_extension(const VkExtensionProperties *exts, uint32_t count,
                          const char *name)
@@ -56,6 +58,7 @@ int main(void)
     PFN_vkGetPhysicalDeviceMemoryProperties get_memory_properties = NULL;
     PFN_vkGetPhysicalDeviceQueueFamilyProperties get_queue_properties = NULL;
     PFN_vkEnumerateDeviceExtensionProperties enumerate_device_extensions = NULL;
+    PFN_vkGetPhysicalDeviceFeatures2 get_physical_device_features2 = NULL;
     PFN_vkCreateDevice create_device = NULL;
     PFN_vkDestroyDevice destroy_device = NULL;
     VkExtensionProperties *instance_exts = NULL;
@@ -71,6 +74,7 @@ int main(void)
     uint32_t device_ext_count = 0;
     uint32_t graphics_queue = UINT32_MAX;
     uint32_t i;
+    int descriptor_indexing_available = 0;
     VkResult vr;
 
     printf("SCHEMA=%s\n", PROBE_SCHEMA);
@@ -131,7 +135,7 @@ int main(void)
 #endif
 #ifdef VK_EXT_METAL_SURFACE_EXTENSION_NAME
     /* A healthy Wine guest normally sees Win32 surface semantics, not the
-     * host-only Metal surface extension.  Print this to catch accidental host
+     * host-only Metal surface extension. Print this to catch accidental host
      * API leakage, but do not fail headless probing on it. */
     printf("GUEST_SEES_EXT_METAL_SURFACE=%d\n",
            has_extension(instance_exts, instance_ext_count,
@@ -147,8 +151,8 @@ int main(void)
 
         memset(&app_info, 0, sizeof(app_info));
         app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-        app_info.pApplicationName = "Madeira Vulkan Probe";
-        app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+        app_info.pApplicationName = "Madeira Detroit Vulkan Probe";
+        app_info.applicationVersion = VK_MAKE_VERSION(2, 0, 0);
         app_info.pEngineName = "Madeira";
         app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
         app_info.apiVersion = loader_version >= VK_API_VERSION_1_1
@@ -181,8 +185,6 @@ int main(void)
     }
     printf("INSTANCE=PASS\n");
 
-    /* The C variable names intentionally differ from Vulkan export names
-     * because this probe does not link a Vulkan import library. */
     destroy_instance = (PFN_vkDestroyInstance)get_instance_proc_addr(instance, "vkDestroyInstance");
     enumerate_physical_devices =
         (PFN_vkEnumeratePhysicalDevices)get_instance_proc_addr(instance, "vkEnumeratePhysicalDevices");
@@ -197,6 +199,9 @@ int main(void)
     enumerate_device_extensions =
         (PFN_vkEnumerateDeviceExtensionProperties)get_instance_proc_addr(
             instance, "vkEnumerateDeviceExtensionProperties");
+    get_physical_device_features2 =
+        (PFN_vkGetPhysicalDeviceFeatures2)get_instance_proc_addr(
+            instance, "vkGetPhysicalDeviceFeatures2");
     create_device = (PFN_vkCreateDevice)get_instance_proc_addr(instance, "vkCreateDevice");
     if (!destroy_instance || !enumerate_physical_devices || !get_physical_device_properties ||
         !get_memory_properties || !get_queue_properties || !enumerate_device_extensions || !create_device)
@@ -272,21 +277,58 @@ int main(void)
     printf("HAS_KHR_SWAPCHAIN=%d\n",
            has_extension(device_exts, device_ext_count, VK_KHR_SWAPCHAIN_EXTENSION_NAME));
 #ifdef VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME
-    printf("HAS_EXT_DESCRIPTOR_INDEXING=%d\n",
-           has_extension(device_exts, device_ext_count, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME));
+    descriptor_indexing_available =
+        has_extension(device_exts, device_ext_count, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+    printf("HAS_EXT_DESCRIPTOR_INDEXING=%d\n", descriptor_indexing_available);
+#else
+    printf("HAS_EXT_DESCRIPTOR_INDEXING=0\n");
 #endif
 #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
     printf("HAS_KHR_PORTABILITY_SUBSET=%d\n",
            has_extension(device_exts, device_ext_count, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME));
 #endif
 
+    if (!descriptor_indexing_available)
+        return fail(32, "detroit-capabilities",
+                    "VK_EXT_descriptor_indexing is required by Detroit's renderer but is unavailable");
+
+#ifdef VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME
+    if (get_physical_device_features2) {
+        VkPhysicalDeviceFeatures2 features2;
+        VkPhysicalDeviceDescriptorIndexingFeatures descriptor_features;
+        memset(&features2, 0, sizeof(features2));
+        memset(&descriptor_features, 0, sizeof(descriptor_features));
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        descriptor_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        features2.pNext = &descriptor_features;
+        get_physical_device_features2(physical_devices[0], &features2);
+        printf("DESCRIPTOR_INDEXING_SHADER_UNIFORM_BUFFER_NONUNIFORM=%u\n",
+               descriptor_features.shaderUniformBufferArrayNonUniformIndexing);
+        printf("DESCRIPTOR_INDEXING_SHADER_SAMPLED_IMAGE_NONUNIFORM=%u\n",
+               descriptor_features.shaderSampledImageArrayNonUniformIndexing);
+        printf("DESCRIPTOR_INDEXING_SHADER_STORAGE_BUFFER_NONUNIFORM=%u\n",
+               descriptor_features.shaderStorageBufferArrayNonUniformIndexing);
+        printf("DESCRIPTOR_INDEXING_SHADER_STORAGE_IMAGE_NONUNIFORM=%u\n",
+               descriptor_features.shaderStorageImageArrayNonUniformIndexing);
+        printf("DESCRIPTOR_INDEXING_PARTIALLY_BOUND=%u\n",
+               descriptor_features.descriptorBindingPartiallyBound);
+        printf("DESCRIPTOR_INDEXING_VARIABLE_COUNT=%u\n",
+               descriptor_features.descriptorBindingVariableDescriptorCount);
+        printf("DESCRIPTOR_INDEXING_RUNTIME_ARRAY=%u\n",
+               descriptor_features.runtimeDescriptorArray);
+    } else {
+        printf("DESCRIPTOR_INDEXING_FEATURE_QUERY=UNAVAILABLE\n");
+    }
+#endif
+
     {
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queue_info;
         VkDeviceCreateInfo device_info;
-        const char *enabled_device_exts[1];
+        const char *enabled_device_exts[2];
         uint32_t enabled_device_ext_count = 0;
 
+        enabled_device_exts[enabled_device_ext_count++] = VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME;
 #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
         if (has_extension(device_exts, device_ext_count,
                           VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME))
@@ -304,19 +346,21 @@ int main(void)
         device_info.queueCreateInfoCount = 1;
         device_info.pQueueCreateInfos = &queue_info;
         device_info.enabledExtensionCount = enabled_device_ext_count;
-        device_info.ppEnabledExtensionNames = enabled_device_ext_count ? enabled_device_exts : NULL;
+        device_info.ppEnabledExtensionNames = enabled_device_exts;
         vr = create_device(physical_devices[0], &device_info, NULL, &device);
         if (vr != VK_SUCCESS || device == VK_NULL_HANDLE) {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "vkCreateDevice failed (%d)", (int)vr);
-            return fail(32, "create-device", msg);
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                     "vkCreateDevice with Detroit descriptor-indexing capability failed (%d)", (int)vr);
+            return fail(33, "detroit-capabilities", msg);
         }
     }
     printf("LOGICAL_DEVICE=PASS\n");
+    printf("DETROIT_DESCRIPTOR_INDEXING=PASS\n");
 
     destroy_device = (PFN_vkDestroyDevice)get_instance_proc_addr(instance, "vkDestroyDevice");
     if (!destroy_device)
-        return fail(33, "destroy-device", "vkDestroyDevice could not be resolved");
+        return fail(34, "destroy-device", "vkDestroyDevice could not be resolved");
     destroy_device(device, NULL);
     device = VK_NULL_HANDLE;
     destroy_instance(instance, NULL);
