@@ -3,8 +3,8 @@
 
 The probe never modifies game files. It identifies the actual Windows build,
 checks the classic Unity/Mono/Steamworks layout, records hashes, and emits the
-smallest sensible Madeira route. Public depot metadata is used only as a shape
-check; the owned files remain the authority.
+smallest sensible Madeira route. Public metadata is reference only; the owned
+files and actual iPad logs remain authoritative.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import re
 import struct
 from typing import Iterable
 
-SCHEMA = "MADEIRA_HUNIECAM_PROBE_V3"
+SCHEMA = "MADEIRA_HUNIECAM_PROBE_V4"
 TITLE = "HunieCam Studio"
 EXPECTED_EXE = "HunieCamStudio.exe"
 KNOWN_STEAM_APP_ID = 426000
@@ -27,6 +27,9 @@ KNOWN_WINDOWS_DEPOT_LAST_PUBLIC_UPDATE = "2020-07-18T09:12:08Z"
 KNOWN_WINDOWS_LAUNCH_EXE = "HunieCamStudio.exe"
 KNOWN_WINDOWS_LAUNCH_ARGUMENTS = ""
 KNOWN_UNITY_VERSION = "5.3.4f1"
+KNOWN_CONFIG_REGISTRY = r"HKEY_CURRENT_USER\Software\HuniePot\HunieCam Studio\"
+KNOWN_SAVE_PATH = r"%USERPROFILE%\AppData\LocalLow\HuniePot\HunieCam Studio\"
+KNOWN_MAX_BUILTIN_RESOLUTION = "1600x900"
 UNITY_VERSION_RE = re.compile(rb"(?<![0-9A-Za-z])([0-9]{1,4}\.[0-9]+\.[0-9]+[a-z][0-9]+)(?![0-9A-Za-z])")
 
 EXPECTED_LAYOUT = (
@@ -160,7 +163,12 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
             "windows_launch_executable": KNOWN_WINDOWS_LAUNCH_EXE,
             "windows_launch_arguments": KNOWN_WINDOWS_LAUNCH_ARGUMENTS,
             "unity_version": KNOWN_UNITY_VERSION,
-            "note": "Reference only; the owned files are authoritative.",
+            "minimum_windows_graphics": "DirectX 9.0a compatible",
+            "max_builtin_widescreen_resolution": KNOWN_MAX_BUILTIN_RESOLUTION,
+            "title_has_native_fps_cap": False,
+            "configuration_registry_path": KNOWN_CONFIG_REGISTRY,
+            "save_path": KNOWN_SAVE_PATH,
+            "note": "Reference only; the owned files and actual device logs are authoritative.",
         },
         "source": str(root),
         "read_only": True,
@@ -260,7 +268,9 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
         "unity_versions_seen": unity_versions,
         "unity_output_log_found": output_log is not None,
         "unity_output_log": str(output_log) if output_log else None,
-        "known_title_renderer": "Direct3D 9",
+        "renderer_must_be_observed_from_log": True,
+        "minimum_windows_graphics_reference": "DirectX 9.0a compatible",
+        "title_native_fps_cap": False,
         "steam_cloud_known": False,
     })
 
@@ -294,29 +304,36 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     if output_log:
         findings.append("A Unity output_log.txt already exists; feed it to tools/huniecam_session_triage.py with the Madeira log.")
 
+    findings.append("Public title data places configuration in the Windows registry and saves in LocalLow; keep those evidence lanes separate so a config reset is not mistaken for save loss.")
+    findings.append("Public title data reports no native FPS cap. The 60 FPS baseline is therefore a Madeira control that must be measured, not assumed.")
+
     route: dict[str, object] = report["route"]  # type: ignore[assignment]
     route.update({
         "cpu": "Madeira WoW64 + FEX x86" if is_i386 else "verify from PE result",
         "runtime": "game-bundled Unity Mono" if mono and not gameassembly else "verify from install",
         "wine_mono_download": "not needed for HunieCam's own Unity runtime" if mono else "not determined",
-        "graphics_baseline": "DXMT Direct3D 9 emulated frontend",
+        "graphics_baseline": "no renderer override; let the owned Unity player choose and record the selected API in output_log.txt",
+        "minimum_graphics_reference": "DirectX 9.0a compatible",
         "unity_arguments_baseline": "",
         "official_steam_windows_launch": {"executable": KNOWN_WINDOWS_LAUNCH_EXE, "arguments": KNOWN_WINDOWS_LAUNCH_ARGUMENTS},
         "resolution_baseline": "1280x720",
+        "max_builtin_widescreen_resolution_reference": KNOWN_MAX_BUILTIN_RESOLUTION,
         "fps_baseline": 60,
+        "fps_cap_source": "Madeira profile; title itself is publicly documented as uncapped",
         "working_directory": "game/program folder (Madeira direct-launch default)",
         "input_baseline": "direct pointer/tap + keyboard/mouse; do not require XInput",
         "steam_baseline": "separate direct-game compatibility from Madeira Dock/Steam integration",
-        "save_path": "%USERPROFILE%\\AppData\\LocalLow\\HuniePot\\HunieCam Studio\\",
+        "config_registry_path": KNOWN_CONFIG_REGISTRY,
+        "save_path": KNOWN_SAVE_PATH,
         "streaming": False,
         "native_recompile": False,
     })
 
     experiments.extend([
         {
-            "when": "Unity output log unexpectedly selects Direct3D 11 or graphics init fails before D3D9 is proven",
+            "when": "Unity selects Direct3D 11 AND a graphics-init/crash failure implicates that renderer, or graphics initialization fails before any API is proven",
             "change": "launch argument: -force-d3d9",
-            "reason": "Old Unity Windows players support -force-d3d9; do not add it when D3D9 is already selected.",
+            "reason": "Unity 5-era Windows players support -force-d3d9, but a clean D3D11 selection is not itself a failure. Keep this as a one-variable renderer A/B only when evidence points at graphics startup.",
         },
         {
             "when": "Unity/Mono reaches managed startup and the first failure is a real protected-memory store encoding, not insn=0xd4200000",
@@ -333,12 +350,13 @@ def probe_install(source: pathlib.Path) -> dict[str, object]:
     next_actions.extend([
         "Use this current-upstream compatibility branch and confirm JIT + Memory+ are ready before launch.",
         "Create an isolated HunieCam library entry pointing at HunieCamStudio.exe; leave the original game copy untouched.",
-        "Use direct launch first with the program folder as the working folder, 1280x720, 60 FPS, default D3D9 routing, and no speculative config switches.",
+        "Use direct launch first with the program folder as the working folder, 1280x720, Fit, 60 FPS, no renderer override, and no speculative config switches.",
+        "Measure the first run's FPS so the intended 60 FPS Madeira cap is proven active; HunieCam itself does not provide that cap.",
         "Before any non-default run, pass its config and arguments through tools/huniecam_config_guard.py.",
         "After the first run export madeira-log.txt and copy HunieCamStudio_Data/output_log.txt if Unity created it.",
         "Run tools/huniecam_session_triage.py and tools/huniecam_issue_matcher.py so the next experiment is chosen from evidence, one variable at a time.",
-        "Record each serious run in tools/huniecam_attempt_ledger.py; promote a profile only when it moves the deepest proven stage or is a deliberate repeatability/acceptance run.",
-        "Once startup works, verify pointer alignment, audio, disposable save/relaunch, 30-minute stability, three cold launches, and suspend/resume.",
+        "Generate tools/huniecam_run_record.py output before comparing attempts so different owned binaries cannot be confused for an A/B result.",
+        "Once startup works, use tools/huniecam_device_evidence.py for the nine-point pointer sweep, audio/rendering checks, counted cold launches, 30-minute stability and suspend/resume.",
     ])
     return report
 
