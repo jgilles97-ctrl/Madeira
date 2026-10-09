@@ -11,13 +11,49 @@ sys.modules["huniecam_next_run"] = mod
 SPEC.loader.exec_module(mod)
 
 
+def acceptance_session():
+    return {"deepest_stage": 75, "next": {"priority": "device acceptance", "action": "test gameplay", "experiment": {"config": "", "arguments": ""}}}
+
+
+def clean_perf():
+    return {"comparison_clean": True, "fps_cap": {"expected": 60, "effective": True}, "warnings": []}
+
+
+def valid_contract():
+    return {"valid": True, "errors": []}
+
+
 class HunieCamNextRunTests(unittest.TestCase):
-    def test_acceptance_stage_stops_tuning(self):
-        session = {"deepest_stage": 75, "next": {"priority": "device acceptance", "action": "test gameplay", "experiment": {"config": "", "arguments": ""}}}
-        r = mod.choose(session)
+    def test_acceptance_requires_contract_and_clean_performance(self):
+        r = mod.choose(acceptance_session(), performance=clean_perf(), evidence_contract=valid_contract())
+        self.assertEqual(r["schema"], "MADEIRA_HUNIECAM_NEXT_RUN_V2")
         self.assertEqual(r["status"], "RUN_ACCEPTANCE_BASELINE")
         self.assertEqual(r["purpose"], "acceptance")
         self.assertEqual(r["profile"]["config"], "")
+
+    def test_acceptance_without_contract_stops_before_final_test(self):
+        r = mod.choose(acceptance_session(), performance=clean_perf())
+        self.assertEqual(r["status"], "BUILD_EVIDENCE_CONTRACT_THEN_ACCEPTANCE")
+        self.assertFalse(r["run_now"])
+
+    def test_acceptance_with_dirty_performance_repeats_measurement_not_tuning(self):
+        perf = {"comparison_clean": False, "fps_cap": {"expected": 60, "effective": False}, "warnings": ["cap missing"]}
+        r = mod.choose(acceptance_session(), performance=perf, evidence_contract=valid_contract())
+        self.assertEqual(r["status"], "RUN_ACCEPTANCE_MEASUREMENT_BASELINE")
+        self.assertTrue(r["run_now"])
+        self.assertEqual(r["profile"]["config"], "")
+        self.assertEqual(r["profile"]["arguments"], "")
+
+    def test_guard_failure_blocks_even_when_game_code_was_reached(self):
+        guard = {"status": "FAIL", "failures": [{"code": "multiple_variables"}]}
+        r = mod.choose(acceptance_session(), guard=guard, performance=clean_perf(), evidence_contract=valid_contract())
+        self.assertEqual(r["status"], "BLOCK_INVALID_PROFILE")
+        self.assertFalse(r["run_now"])
+
+    def test_invalid_contract_blocks_interpretation(self):
+        r = mod.choose(acceptance_session(), performance=clean_perf(), evidence_contract={"valid": False, "errors": ["hash mismatch"]})
+        self.assertEqual(r["status"], "BLOCK_INVALID_EVIDENCE")
+        self.assertFalse(r["run_now"])
 
     def test_issue_173_blocks_unrelated_tuning(self):
         session = {"deepest_stage": 20, "next": {"priority": "WoW64 breakpoint / self-modifying image runtime bug", "action": "preserve evidence", "experiment": {"config": "", "arguments": ""}}}
