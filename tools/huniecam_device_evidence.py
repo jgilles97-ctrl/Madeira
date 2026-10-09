@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Generate and normalize structured on-device evidence for HunieCam acceptance.
 
-Cycle 6 can seed the template from a sealed run context. Device observations
-then carry the exact run/build/profile fingerprints they describe. Unknown
-observations remain null; named pointer/cold-launch/suspend trials remain the
-authoritative device evidence.
+Cycle 7 Device Evidence V3 adds a title-specific drag/release test. HunieCam is
+reported to accept touch dragging on Windows but fail to register the release,
+which can make its portrait-heavy gameplay unusable. A pointer grid therefore
+is not enough: real gameplay drags must prove press, movement, release and the
+resulting game response. Unknown observations remain null.
 """
 from __future__ import annotations
 
@@ -13,12 +14,13 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2"
+SCHEMA = "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3"
 POINTER_POINTS = (
     "top_left", "top_center", "top_right",
     "middle_left", "center", "middle_right",
     "bottom_left", "bottom_center", "bottom_right",
 )
+DRAG_RELEASE_TRIALS = 3
 
 
 def _link(run_context: dict[str, Any] | None) -> dict[str, Any]:
@@ -44,6 +46,18 @@ def template(run_context: dict[str, Any] | None = None) -> dict[str, Any]:
         "repeatable_profile": None,
         "stable_minutes": 0,
         "pointer_grid": [{"point": point, "passed": None, "note": ""} for point in POINTER_POINTS],
+        "drag_release_trials": [
+            {
+                "trial": i,
+                "input_mode": None,
+                "press_registered": None,
+                "movement_registered": None,
+                "release_registered": None,
+                "game_response_registered": None,
+                "note": "",
+            }
+            for i in range(1, DRAG_RELEASE_TRIALS + 1)
+        ],
         "cold_launch_trials": [
             {"trial": 1, "success": None, "note": ""},
             {"trial": 2, "success": None, "note": ""},
@@ -54,10 +68,11 @@ def template(run_context: dict[str, Any] | None = None) -> dict[str, Any]:
             {"trial": 2, "success": None, "note": ""},
         ],
         "gameplay_notes": "",
+        "drag_release_notes": "",
         "rendering_notes": "",
         "audio_notes": "",
         "performance_notes": "",
-        "rule": "Use true/false only after observing the result on the iPad. Leave unknown items null. Preserve the seeded run/build/profile link; do not reuse this form for a different launch.",
+        "rule": "Use true/false only after observing the result on the iPad. For each drag trial, prove press, movement, release and the resulting in-game response separately. Leave unknown items null and never reuse this run-linked form for another launch.",
     }
 
 
@@ -65,9 +80,23 @@ def _bool(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+def _drag_trial_state(item: dict[str, Any]) -> bool | None:
+    values = [
+        _bool(item.get("press_registered")),
+        _bool(item.get("movement_registered")),
+        _bool(item.get("release_registered")),
+        _bool(item.get("game_response_registered")),
+    ]
+    if any(v is False for v in values):
+        return False
+    if any(v is None for v in values):
+        return None
+    return True
+
+
 def summarize(data: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
-    if data.get("schema") not in {"MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V1", SCHEMA}:
+    if data.get("schema") not in {"MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V1", "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V2", SCHEMA}:
         warnings.append(f"Unexpected device-evidence schema: {data.get('schema')!r}")
 
     points = data.get("pointer_grid") if isinstance(data.get("pointer_grid"), list) else []
@@ -89,6 +118,14 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
     if missing:
         warnings.append("Missing pointer-grid point(s): " + ", ".join(missing))
 
+    drag_rows = data.get("drag_release_trials") if isinstance(data.get("drag_release_trials"), list) else []
+    drag_states = [_drag_trial_state(x) for x in drag_rows if isinstance(x, dict)]
+    drag_tested = sum(1 for x in drag_states if x is not None)
+    drag_passed = sum(1 for x in drag_states if x is True)
+    drag_complete = len(drag_states) >= DRAG_RELEASE_TRIALS and all(x is True for x in drag_states[:DRAG_RELEASE_TRIALS])
+    if data.get("schema") != SCHEMA:
+        warnings.append("Legacy device evidence does not prove the Cycle 7 HunieCam drag-release gate.")
+
     cold = data.get("cold_launch_trials") if isinstance(data.get("cold_launch_trials"), list) else []
     cold_values = [_bool(x.get("success")) for x in cold if isinstance(x, dict)]
     suspend = data.get("suspend_resume_trials") if isinstance(data.get("suspend_resume_trials"), list) else []
@@ -98,6 +135,8 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
     normalized["schema"] = SCHEMA
     normalized["pointer_points_tested"] = len(passed) + len(failed)
     normalized["pointer_points_passed"] = len(passed)
+    normalized["drag_release_trials_tested"] = drag_tested
+    normalized["drag_release_trials_passed"] = drag_passed
     normalized["cold_launches"] = sum(1 for x in cold_values if x is True)
     normalized["suspend_resume_cycles"] = sum(1 for x in suspend_values if x is True)
 
@@ -106,7 +145,7 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
     suspend_complete = len(suspend_values) >= 2 and all(x is True for x in suspend_values[:2])
     run_link_ready = all(bool(normalized.get(k)) for k in ("run_id_sha256", "build_fingerprint_sha256", "profile_sha256"))
     if not run_link_ready:
-        warnings.append("Device observations are not linked to a sealed Cycle 6 run ID/build/profile; final acceptance must remain unproven.")
+        warnings.append("Device observations are not linked to a sealed run ID/build/profile; final acceptance must remain unproven.")
 
     return {
         "schema": SCHEMA,
@@ -116,12 +155,15 @@ def summarize(data: dict[str, Any]) -> dict[str, Any]:
             "pointer_missing": missing,
             "pointer_unknown": unknown,
             "pointer_failed": failed,
+            "drag_release_trials_complete": drag_complete,
+            "drag_release_trials_tested": drag_tested,
+            "drag_release_trials_passed": drag_passed,
             "cold_launch_trials_complete": cold_complete,
             "suspend_resume_trials_complete": suspend_complete,
             "run_link_ready": run_link_ready,
         },
         "warnings": warnings,
-        "rule": "Structured trial details are authoritative. The normalized object is directly consumable by Acceptance V5 and must remain linked to the launch actually observed.",
+        "rule": "Structured trial details are authoritative. Final acceptance requires three real HunieCam gameplay drag/release trials in which press, movement, release and the resulting game response all succeed.",
     }
 
 
@@ -139,11 +181,7 @@ def main() -> int:
     norm.add_argument("input", type=pathlib.Path)
     norm.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = p.parse_args()
-    if args.command == "template":
-        report = template(_load(args.run_context))
-    else:
-        raw = json.loads(args.input.read_text(encoding="utf-8"))
-        report = summarize(raw)
+    report = template(_load(args.run_context)) if args.command == "template" else summarize(json.loads(args.input.read_text(encoding="utf-8")))
     text = json.dumps(report, indent=2, sort_keys=True)
     if args.json_path:
         args.json_path.write_text(text + "\n", encoding="utf-8")
