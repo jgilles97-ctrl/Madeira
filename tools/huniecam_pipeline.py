@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Run the HunieCam compatibility analysis pipeline without touching game files.
 
-Cycle 5 joins preflight, guard, session, performance, issue matching, next-run
-choice, provenance record, evidence contract, compact failure capsule, optional
-registry configuration snapshot, and a privacy-minimal manifest.
+Cycle 6 adds two important controls to the existing evidence-first pipeline:
+(1) an exact per-launch run identity that binds the structured session/run record
+to the actual Madeira/Unity log contents, and (2) a read-only PE import audit of
+the owned executable so Windows prerequisites come from evidence, not guesses.
 """
 from __future__ import annotations
 
@@ -18,14 +19,16 @@ import huniecam_evidence_manifest as evidence_manifest
 import huniecam_failure_capsule as failure_capsule_tool
 import huniecam_issue_matcher as issue_matcher
 import huniecam_next_run as next_run
+import huniecam_pe_imports as pe_imports_tool
 import huniecam_performance as performance_tool
 import huniecam_probe as probe
 import huniecam_registry_snapshot as registry_snapshot_tool
+import huniecam_run_context as run_context_tool
 import huniecam_run_record as run_record_tool
 import huniecam_session_triage as session_triage
 import huniecam_storage_guard as storage_guard
 
-SCHEMA = "MADEIRA_HUNIECAM_PIPELINE_V3"
+SCHEMA = "MADEIRA_HUNIECAM_PIPELINE_V4"
 
 
 def read_text(path: pathlib.Path | None) -> str:
@@ -77,10 +80,13 @@ def run(
         "relative_executable": relative_executable,
     }
     record = run_record_tool.build(pre, session, profile, perf)
-    contract = evidence_contract.validate(pre, session, guard, perf, record)
-    # The next-run engine must consume the same validated evidence it is about
-    # to advise on. This prevents a reached-scene run from jumping to final
-    # acceptance when the profile/evidence/performance controls failed.
+    run_context = run_context_tool.build(record, session, madeira_text, unity_text)
+    pe_imports = pe_imports_tool.parse(install / "HunieCamStudio.exe")
+    contract = evidence_contract.validate(
+        pre, session, guard, perf, record,
+        run_context=run_context, pe_imports=pe_imports,
+    )
+    # Advice consumes the same validated evidence set that the run will retain.
     nxt = next_run.choose(session, issues, ledger, guard, perf, contract)
     registry = registry_snapshot_tool.snapshot(registry_text) if registry_text else None
 
@@ -91,14 +97,17 @@ def run(
         "issues": out_dir / "huniecam-issues.json",
         "performance": out_dir / "huniecam-performance.json",
         "failure_capsule": out_dir / "huniecam-failure-capsule.json",
-        "next": out_dir / "huniecam-next-run.json",
         "run_record": out_dir / "huniecam-run-record.json",
+        "run_context": out_dir / "huniecam-run-context.json",
+        "pe_imports": out_dir / "huniecam-pe-imports.json",
         "contract": out_dir / "huniecam-evidence-contract.json",
+        "next": out_dir / "huniecam-next-run.json",
     }
     for key, value in (
         ("preflight", pre), ("guard", guard), ("session", session),
         ("issues", issues), ("performance", perf), ("failure_capsule", failure_capsule),
-        ("next", nxt), ("run_record", record), ("contract", contract),
+        ("run_record", record), ("run_context", run_context), ("pe_imports", pe_imports),
+        ("contract", contract), ("next", nxt),
     ):
         write_json(paths[key], value)
 
@@ -122,6 +131,8 @@ def run(
         "performance": paths["performance"],
         "failure_capsule": paths["failure_capsule"],
         "run_record": paths["run_record"],
+        "run_context": paths["run_context"],
+        "pe_imports": paths["pe_imports"],
         "contract": paths["contract"],
         "registry_snapshot": registry_path,
         "madeira_log": madeira_log,
@@ -137,12 +148,15 @@ def run(
     if storage_path:
         output_names.append(storage_path.name)
 
+    categories = pe_imports.get("categories") if isinstance(pe_imports.get("categories"), dict) else {}
     summary = {
         "schema": SCHEMA,
         "output_directory": out_dir.name,
         "guard_status": guard.get("status"),
         "evidence_contract_valid": contract.get("valid"),
         "run_record_ready": record.get("ready_for_comparison"),
+        "run_context_ready": run_context.get("ready"),
+        "run_id_sha256": run_context.get("run_id_sha256"),
         "owned_build_fingerprint": (record.get("build") or {}).get("fingerprint_sha256") if isinstance(record.get("build"), dict) else None,
         "deepest_stage": session.get("deepest_stage"),
         "deepest_stage_name": session.get("deepest_stage_name"),
@@ -150,6 +164,9 @@ def run(
         "failure_capsule_signature": failure_capsule.get("signature"),
         "performance_comparison_clean": perf.get("comparison_clean"),
         "fps_cap_effective": ((perf.get("fps_cap") or {}).get("effective") if isinstance(perf.get("fps_cap"), dict) else None),
+        "pe_import_audit_valid": pe_imports.get("valid"),
+        "pe_import_count": pe_imports.get("import_count"),
+        "pe_dependency_categories": sorted(categories),
         "registry_configuration_found": registry.get("found") if registry else None,
         "next_run_status": nxt.get("status"),
         "next_run_priority": nxt.get("priority"),
@@ -157,7 +174,7 @@ def run(
         "storage_large_jit_dumps": storage.get("large_jit_dump_count") if storage else None,
         "evidence_manifest": manifest_path.name,
         "outputs": output_names,
-        "rule": "Do not run a guard-rejected profile or compare an invalid evidence set. Registry changes are configuration evidence, not save evidence. Performance is not comparable until the intended FPS cap and device state are proven clean.",
+        "rule": "Do not run a guard-rejected profile, compare an invalid evidence set, or mix files across run IDs. Dependency changes require evidence from the owned PE import audit or an exact missing-DLL runtime error.",
     }
     write_json(out_dir / "huniecam-pipeline-summary.json", summary)
     return summary
