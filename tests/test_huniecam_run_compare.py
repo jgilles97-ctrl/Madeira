@@ -11,6 +11,14 @@ sys.modules["huniecam_run_compare"] = mod
 SPEC.loader.exec_module(mod)
 
 
+def record(build="build-a", profile=None):
+    return {
+        "ready_for_comparison": True,
+        "build": {"fingerprint_sha256": build},
+        "profile": profile or {"config": "", "arguments": "", "resolution": "1280x720", "display": "fit", "fps": 60},
+    }
+
+
 class HunieCamRunCompareTests(unittest.TestCase):
     def test_one_change_that_moves_deeper_is_kept(self):
         before = {"deepest_stage": 55, "failures": [{"code": "store_undecoded"}]}
@@ -53,6 +61,26 @@ class HunieCamRunCompareTests(unittest.TestCase):
         p1 = {"config": "", "notes": "retry", "timestamp": "b"}
         report = mod.compare(session, session, p0, p1)
         self.assertEqual(report["changed_variable_count"], 0)
+
+    def test_different_owned_builds_are_never_compared(self):
+        before = {"deepest_stage": 40, "failures": []}
+        after = {"deepest_stage": 75, "failures": []}
+        report = mod.compare(before, after, before_record=record("aaa"), after_record=record("bbb"))
+        self.assertEqual(report["verdict"], "INVALID_PROVENANCE")
+        self.assertFalse(report["comparison_useful"])
+        self.assertFalse(report["keep_single_change"])
+        self.assertFalse(report["provenance"]["same_owned_build"])
+
+    def test_same_build_records_supply_profiles_and_allow_single_change(self):
+        before = {"deepest_stage": 55, "failures": [{"code": "store_undecoded"}]}
+        after = {"deepest_stage": 75, "failures": []}
+        p0 = {"config": "", "arguments": "", "resolution": "1280x720", "display": "fit", "fps": 60}
+        p1 = {"config": "env.MADEIRA_WOW_RWX_PLAIN = 1", "arguments": "", "resolution": "1280x720", "display": "fit", "fps": 60}
+        report = mod.compare(before, after, before_record=record("same", p0), after_record=record("same", p1))
+        self.assertEqual(report["verdict"], "DEEPER")
+        self.assertTrue(report["comparison_useful"])
+        self.assertTrue(report["provenance"]["same_owned_build"])
+        self.assertTrue(report["performance_baseline_same"])
 
 
 if __name__ == "__main__":
