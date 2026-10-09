@@ -5,9 +5,9 @@ This does not pretend to execute an iPad. It protects the properties that make
 our eventual physical-device result meaningful: the controller itself is an
 x64 Windows program, runs all three canaries through Wine/FEX in a strict order,
 has finite timeouts, stops on the first failure, only reports success after the
-120-frame presentation stage succeeds, and the iPad app exposes a deliberately
-narrow one-tap route to that fixed diagnostic without becoming an arbitrary EXE
-launcher.
+120-frame presentation stage succeeds, durably publishes proof only after that
+full pass, and the iPad app exposes a deliberately narrow one-tap route to the
+fixed diagnostic without becoming an arbitrary EXE launcher.
 """
 
 from pathlib import Path
@@ -64,6 +64,25 @@ def main() -> None:
     require(gate, "OVERALL=PASS", "success summary")
     require(gate, "PRESENTED_120_FRAMES=PASS", "120-frame success marker")
     require(gate, "NEXT_GATE=detroit-process-and-shader-compilation", "next-gate marker")
+
+    # Durable proof is stricter than stdout. Every new test deletes stale proof;
+    # only the x64 Windows controller can publish a new proof, and it does so via
+    # temp-file + flush + atomic replacement after every child has passed.
+    require(gate, '#define PROOF_SCHEMA "MADEIRA_DETROIT_DEVICE_GATE_PROOF_V1"', "proof schema")
+    require(gate, '#define PROOF_PATH "C:\\\\madeira-detroit-vulkan-gate.txt"', "fixed proof path")
+    require(gate, "clear_stale_proof();", "stale proof deletion before testing")
+    require(gate, "DeleteFileA(PROOF_PATH)", "stale proof removal")
+    require(gate, "FILE_FLAG_WRITE_THROUGH", "durable proof file create")
+    require(gate, "FlushFileBuffers(file)", "proof flush")
+    require(gate, "MoveFileExA(PROOF_TEMP_PATH, PROOF_PATH", "atomic proof publication")
+    require(gate, "MOVEFILE_WRITE_THROUGH", "durable proof rename")
+    require(gate, "PROOF_RESULT=NOT_WRITTEN", "failed-gate proof suppression")
+    require(gate, "FAILED_GATE=proof-publication", "proof publication failure gate")
+    require_order(
+        gate,
+        ["VULKAN_DEVICE=PASS", "WIN32_SURFACE=PASS", "PRESENTED_120_FRAMES=PASS", "write_full_pass_proof()", "OVERALL=PASS"],
+        "proof publication",
+    )
 
     # Keep the baseline presentation proof display-paced. A 2026 MoltenVK
     # drawable-lifetime report specifically reproduces with uncapped/immediate
@@ -130,6 +149,7 @@ def main() -> None:
     require(shortcuts, '@Published var pendingExe: String?', "existing pending library executable route")
 
     print("PASS: Detroit device gate contract")
+    print("PASS: durable proof is cleared first and published only after full physical pass")
     print("PASS: one-tap iPad gate remains fixed, x64-verified, contained, and library-routed")
 
 
