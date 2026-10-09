@@ -4,6 +4,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 SRC="$HERE/vulkan_compute_writeback_probe.c"
+PATCHER="$HERE/patch-compute-writeback-portability.py"
+PATCHED_SRC="${TMPDIR:-/tmp}/madeira-detroit-vulkan-compute-writeback-standalone.c"
 OUT="${VULKAN_COMPUTE_WRITEBACK_PROBE_OUT:-$HERE/vulkan_compute_writeback_probe.exe}"
 VK_INCLUDE="${VULKAN_HEADERS:-$REPO_ROOT/toolchains/moltenvk-detroit-ios/include}"
 
@@ -38,17 +40,24 @@ if [ ! -f "$VK_INCLUDE/vulkan/vulkan.h" ]; then
     echo "error: Vulkan headers were not found at $VK_INCLUDE" >&2
     exit 3
 fi
+if [ ! -f "$PATCHER" ]; then
+    echo "error: compute portability patcher missing: $PATCHER" >&2
+    exit 4
+fi
+
+python3 "$PATCHER" "$SRC" "$PATCHED_SRC"
 
 echo "=== Madeira Detroit compute writeback probe ==="
 echo "compiler: $CC"
 echo "headers:  $VK_INCLUDE"
+echo "source:   $PATCHED_SRC"
 echo "output:   $OUT"
 
 "$CC" \
     -std=c11 -O2 -g \
     -Wall -Wextra -Werror -Wno-cast-function-type \
     -I"$VK_INCLUDE" \
-    -o "$OUT" "$SRC" \
+    -o "$OUT" "$PATCHED_SRC" \
     -lkernel32
 
 if [ -n "${TEST_BUNDLE_DIR:-}" ]; then
