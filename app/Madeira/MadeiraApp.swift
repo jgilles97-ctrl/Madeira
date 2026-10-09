@@ -62,6 +62,10 @@ enum DetroitVulkanDeviceGateLauncher {
     private static let fnvOffset: UInt64 = 14_695_981_039_346_656_037
     private static let fnvPrime: UInt64 = 1_099_511_628_211
 
+    static var foregroundInvalidationURL: URL {
+        LibraryModel.drive.appendingPathComponent("madeira-detroit-vulkan-gate-invalid.txt", isDirectory: false)
+    }
+
     private enum GateError: LocalizedError {
         case payloadFolderMissing
         case payloadMissing(String)
@@ -192,7 +196,7 @@ enum DetroitVulkanDeviceGateLauncher {
         entry.id = entryID
         entry.graphicsAPI = "Vulkan / MoltenVK diagnostic"
         entry.resolution = "1280x720"
-        entry.fpsMode = 3                 // Detroit's first real target: 30 FPS.
+        entry.fpsMode = 3
         entry.liveLogs = true
         entry.performance = true
         entry.config = """
@@ -200,14 +204,28 @@ enum DetroitVulkanDeviceGateLauncher {
         env.MVK_DTR_MSL_LIBRARY_CACHE = 0
         """
 
-        // Replace only our fixed diagnostic entry. Never accept a user-supplied
-        // path and never weaken madeira://play's normal library restriction.
         let library = LibraryModel.shared
         library.entries = library.entries.filter {
             $0.id != entryID && $0.relativePath.lowercased() != entry.relativePath.lowercased()
         } + [entry]
         LogStore.shared.log("[detroit-gate] staged 4 verified x64 Windows canaries in C:\\windows\\system32")
         return entry
+    }
+
+    /// The physical proof is valid only if Madeira stayed active while this
+    /// diagnostic's Wine process was actually running. iOS may reject Metal GPU
+    /// work after backgrounding, so a run that leaves the foreground is useful
+    /// diagnostic evidence but is not accepted as our graphics qualification.
+    static func invalidateForForegroundLoss() {
+        let library = LibraryModel.shared
+        guard library.current?.id == entryID, wine_process_is_running() != 0 else { return }
+        let line = "foreground-integrity=invalid\n"
+        do {
+            try Data(line.utf8).write(to: foregroundInvalidationURL, options: .atomic)
+            LogStore.shared.log("[detroit-gate] physical proof invalidated because Madeira left the foreground", level: .error)
+        } catch {
+            LogStore.shared.log("[detroit-gate] could not write foreground invalidation marker: \(error.localizedDescription)", level: .error)
+        }
     }
 
     static func launch() {
@@ -224,8 +242,6 @@ enum DetroitVulkanDeviceGateLauncher {
             let expected = try bundledPayloadFingerprint()
             let entry = try prepareEntry()
             LogStore.shared.log(String(format: "[detroit-gate] one-tap physical-device test requested payload=%016llx", expected))
-            // ContentView already observes this value and launches matching
-            // library entries through jitReadyForLaunch -> runWineFullSequence.
             ShortcutRouter.shared.pendingExe = entry.windowsPath
         } catch {
             let message = error.localizedDescription
@@ -262,10 +278,12 @@ enum DetroitVulkanDeviceGateProof {
     }
 
     static var validForCurrentPayload: Bool {
-        guard let values = fields(),
+        guard !FileManager.default.fileExists(atPath: DetroitVulkanDeviceGateLauncher.foregroundInvalidationURL.path),
+              let values = fields(),
               values["SCHEMA"] == schema,
               values["ARCH"] == "x86_64-windows",
               values["EXECUTION"] == "physical-device-local",
+              values["FOREGROUND_INTEGRITY"] == "PASS",
               values["VULKAN_DEVICE"] == "PASS",
               values["WIN32_SURFACE"] == "PASS",
               values["PRESENTED_120_FRAMES"] == "PASS",
@@ -293,16 +311,16 @@ private struct DetroitVulkanDeviceGateButton: View {
             .padding(16)
             .accessibilityHint(passed
                 ? "This exact test payload passed the local Vulkan, Windows surface, and 120-frame checks on this iPad. Tap to run it again."
-                : "Runs the local Vulkan, Windows surface, and 120-frame graphics checks on this iPad.")
+                : "Runs the local Vulkan, Windows surface, and 120-frame graphics checks on this iPad. Keep Madeira in the foreground until it finishes.")
         }
     }
 }
 
 @main
 struct MadeiraApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
-        // ml1172: read the screen on the main thread; library entries, whose
-        // default Resolution comes from it, are also made on other threads.
         _ = ResolutionChoices.screen
     }
 
@@ -317,10 +335,13 @@ struct MadeiraApp: App {
                     GamepadInput.shared.start()
                     HardwareInput.shared.start()
                     DeviceMemoryHeadroomDiagnostics.start()
-                    JITNetworkShortcut.shared.restoreLeftover()   // also starts its network path monitor
+                    JITNetworkShortcut.shared.restoreLeftover()
                 }
-                // madeira://jit-network/... (the Madeira JIT shortcut returning, JITNetwork.swift),
-                // else madeira://play?exe=... (Home Screen shortcuts, SavesAndShortcuts.swift).
+                .onChange(of: scenePhase) { _, phase in
+                    if phase != .active {
+                        DetroitVulkanDeviceGateLauncher.invalidateForForegroundLoss()
+                    }
+                }
                 .onOpenURL { url in if !JITNetworkShortcut.shared.handle(url) { ShortcutRouter.shared.handle(url) } }
         }
     }
