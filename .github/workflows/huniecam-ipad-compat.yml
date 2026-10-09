@@ -3,29 +3,19 @@ name: HunieCam iPad compatibility checks
 on:
   push:
     paths:
-      - "tools/huniecam_probe.py"
-      - "tools/huniecam_session_triage.py"
-      - "tools/huniecam_save_probe.py"
-      - "tools/huniecam_acceptance.py"
+      - "tools/huniecam_*.py"
       - "tools/madeira_log_triage.py"
-      - "tests/test_huniecam_probe.py"
-      - "tests/test_huniecam_session_triage.py"
-      - "tests/test_huniecam_save_probe.py"
-      - "tests/test_huniecam_acceptance.py"
+      - "tests/test_huniecam_*.py"
       - "tests/test_madeira_log_triage.py"
+      - "docs/HUNIECAM*.md"
       - ".github/workflows/huniecam-ipad-compat.yml"
   pull_request:
     paths:
-      - "tools/huniecam_probe.py"
-      - "tools/huniecam_session_triage.py"
-      - "tools/huniecam_save_probe.py"
-      - "tools/huniecam_acceptance.py"
+      - "tools/huniecam_*.py"
       - "tools/madeira_log_triage.py"
-      - "tests/test_huniecam_probe.py"
-      - "tests/test_huniecam_session_triage.py"
-      - "tests/test_huniecam_save_probe.py"
-      - "tests/test_huniecam_acceptance.py"
+      - "tests/test_huniecam_*.py"
       - "tests/test_madeira_log_triage.py"
+      - "docs/HUNIECAM*.md"
       - ".github/workflows/huniecam-ipad-compat.yml"
 
 permissions:
@@ -35,6 +25,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
@@ -42,26 +33,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Compile helper tools
+      - name: Compile every HunieCam helper and test
         run: >-
           python -m py_compile
-          tools/huniecam_probe.py
-          tools/huniecam_session_triage.py
-          tools/huniecam_save_probe.py
-          tools/huniecam_acceptance.py
+          tools/huniecam_*.py
           tools/madeira_log_triage.py
-          tests/test_huniecam_probe.py
-          tests/test_huniecam_session_triage.py
-          tests/test_huniecam_save_probe.py
-          tests/test_huniecam_acceptance.py
+          tests/test_huniecam_*.py
           tests/test_madeira_log_triage.py
-      - name: Run title preflight tests
-        run: python -m unittest tests.test_huniecam_probe -v
-      - name: Run combined session diagnosis tests
-        run: python -m unittest tests.test_huniecam_session_triage -v
-      - name: Run save persistence tests
-        run: python -m unittest tests.test_huniecam_save_probe -v
-      - name: Run acceptance gate tests
-        run: python -m unittest tests.test_huniecam_acceptance -v
-      - name: Run generic log triage regression tests
+      - name: Run full HunieCam regression suite
+        run: python -m unittest discover -s tests -p 'test_huniecam_*.py' -v
+      - name: Run generic Madeira log triage regressions
         run: python -m unittest tests.test_madeira_log_triage -v
