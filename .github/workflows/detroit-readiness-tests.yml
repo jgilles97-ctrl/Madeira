@@ -5,11 +5,23 @@ on:
     paths:
       - "tools/detroit_readiness.py"
       - "tests/host/check-detroit-readiness.py"
+      - "tests/host/check-detroit-vulkan-contract.py"
+      - "tests/x64/vulkan_probe.c"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "build/ntdll-unix/vulkan_surface_ios.c"
+      - "build/ntdll-unix/vulkan_surface_ios.h"
+      - "app/Madeira/IOSDisplayShim.m"
       - ".github/workflows/detroit-readiness-tests.yml"
   pull_request:
     paths:
       - "tools/detroit_readiness.py"
       - "tests/host/check-detroit-readiness.py"
+      - "tests/host/check-detroit-vulkan-contract.py"
+      - "tests/x64/vulkan_probe.c"
+      - "tests/x64/build-vulkan-probe.sh"
+      - "build/ntdll-unix/vulkan_surface_ios.c"
+      - "build/ntdll-unix/vulkan_surface_ios.h"
+      - "app/Madeira/IOSDisplayShim.m"
       - ".github/workflows/detroit-readiness-tests.yml"
 
 permissions:
@@ -26,7 +38,19 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Compile
-        run: python -m py_compile tools/detroit_readiness.py tests/host/check-detroit-readiness.py
+      - name: Compile Python checks
+        run: >-
+          python -m py_compile
+          tools/detroit_readiness.py
+          tests/host/check-detroit-readiness.py
+          tests/host/check-detroit-vulkan-contract.py
       - name: Detroit readiness fixtures
         run: python tests/host/check-detroit-readiness.py
+      - name: Detroit Vulkan contract
+        run: python tests/host/check-detroit-vulkan-contract.py
+      - name: Compile platform-neutral Vulkan WSI helper
+        run: >-
+          cc -std=c11 -O2 -Wall -Wextra -Werror -fPIC
+          -Ibuild/ntdll-unix
+          -c build/ntdll-unix/vulkan_surface_ios.c
+          -o /tmp/vulkan_surface_ios.o
