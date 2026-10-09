@@ -1,0 +1,29 @@
+name: Detroit Vulkan capability contract
+
+on:
+  push:
+    paths:
+      - "tests/x64/vulkan_probe.c"
+      - "tests/host/check-detroit-vulkan-capabilities.py"
+      - ".github/workflows/detroit-vulkan-capability-tests.yml"
+  pull_request:
+    paths:
+      - "tests/x64/vulkan_probe.c"
+      - "tests/host/check-detroit-vulkan-capabilities.py"
+      - ".github/workflows/detroit-vulkan-capability-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  descriptor-indexing-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Compile capability contract
+        run: python -m py_compile tests/host/check-detroit-vulkan-capabilities.py
+      - name: Verify Detroit descriptor-indexing gate
+        run: python tests/host/check-detroit-vulkan-capabilities.py
