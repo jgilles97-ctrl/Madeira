@@ -2,7 +2,7 @@
 """Create a privacy-minimal manifest for one HunieCam/Madeira evidence set.
 
 Manifest V6 records the fully sealed launch, dependency audits, run-linked
-Device Evidence V3 including the HunieCam-specific drag/release gate, current
+Device Evidence V3 including the HunieCam drag/release touch gate, current
 repeatability/save evidence, and final Acceptance V9. Raw logs, saves, binaries
 and credentials are never embedded in the manifest body.
 """
@@ -11,6 +11,7 @@ import argparse, hashlib, json, pathlib
 from typing import Any
 
 SCHEMA="MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V6"
+TOUCH_INPUT_MODES={"direct_finger","touch_pointer"}
 
 def sha256(path:pathlib.Path)->str:
     h=hashlib.sha256()
@@ -29,9 +30,8 @@ def _drag_state(item:dict[str,Any])->bool|None:
     if any(v is None for v in vals):return None
     return True
 def _drag_summary(payload:dict[str,Any])->dict[str,Any]:
-    rows=payload.get("drag_release_trials") if isinstance(payload.get("drag_release_trials"),list) else []
-    vals=[_drag_state(x) for x in rows if isinstance(x,dict)]
-    return {"drag_release_trials_tested":sum(1 for x in vals if x is not None),"drag_release_trials_passed":sum(1 for x in vals if x is True),"drag_release_trials_complete":len(vals)>=3 and all(x is True for x in vals[:3])}
+    rows=[x for x in (payload.get("drag_release_trials") if isinstance(payload.get("drag_release_trials"),list) else []) if isinstance(x,dict)];vals=[_drag_state(x) for x in rows];modes=[x.get("input_mode") if isinstance(x.get("input_mode"),str) else None for x in rows];required_vals=vals[:3];required_modes=modes[:3];one_touch_mode=len(required_modes)>=3 and None not in required_modes and len(set(required_modes))==1 and required_modes[0] in TOUCH_INPUT_MODES;complete=len(required_vals)>=3 and all(x is True for x in required_vals) and one_touch_mode
+    return {"drag_release_trials_tested":sum(1 for x in vals if x is not None),"drag_release_trials_passed":sum(1 for x in vals if x is True),"drag_release_input_modes_seen":sorted({x for x in modes if x}),"drag_release_touch_mode":required_modes[0] if complete else None,"drag_release_trials_complete":complete}
 def summary(kind:str,data:dict[str,Any]|None)->dict[str,Any]|None:
     if data is None:return None
     if kind=="preflight":
@@ -48,14 +48,12 @@ def summary(kind:str,data:dict[str,Any]|None)->dict[str,Any]|None:
     if kind=="native_modules":return {"schema":data.get("schema"),"valid":data.get("valid"),"module_count":data.get("module_count"),"valid_module_count":data.get("valid_module_count"),"module_set_sha256":data.get("module_set_sha256")}
     if kind=="contract":return {"schema":data.get("schema"),"valid":data.get("valid"),"run_id_sha256":data.get("run_id_sha256"),"run_context_v2_complete":data.get("run_context_v2_complete"),"errors":data.get("errors"),"warnings":data.get("warnings")}
     if kind=="device_template":
-        payload=data.get("normalized") if isinstance(data.get("normalized"),dict) else data
-        return {"schema":payload.get("schema",data.get("schema")),"run_id_sha256":payload.get("run_id_sha256"),"build_fingerprint_sha256":payload.get("build_fingerprint_sha256"),"profile_sha256":payload.get("profile_sha256"),**_drag_summary(payload)}
+        payload=data.get("normalized") if isinstance(data.get("normalized"),dict) else data;return {"schema":payload.get("schema",data.get("schema")),"run_id_sha256":payload.get("run_id_sha256"),"build_fingerprint_sha256":payload.get("build_fingerprint_sha256"),"profile_sha256":payload.get("profile_sha256"),**_drag_summary(payload)}
     if kind=="repeatability":return {"schema":data.get("schema"),"passed":data.get("passed"),"run_count":data.get("run_count"),"unique_run_count":data.get("unique_run_count"),"build_fingerprint_sha256":data.get("build_fingerprint_sha256"),"profile_sha256":data.get("profile_sha256"),"native_module_set_sha256":data.get("native_module_set_sha256")}
     if kind=="save_verification":return {"schema":data.get("schema"),"progress_write_detected":data.get("progress_write_detected"),"save_tree_survived_relaunch":data.get("save_tree_survived_relaunch"),"same_source_directory_proven":data.get("same_source_directory_proven"),"expected_save_folder_proven":data.get("expected_save_folder_proven"),"machine_gate_pass":data.get("machine_gate_pass"),"after_tree_sha256":data.get("after_tree_sha256"),"relaunch_tree_sha256":data.get("relaunch_tree_sha256")}
     if kind.startswith("save"):return {"schema":data.get("schema"),"tree_sha256":data.get("tree_sha256"),"file_count":data.get("file_count"),"progress_write_detected":data.get("progress_write_detected")}
     if kind=="acceptance":return {"schema":data.get("schema"),"overall":data.get("overall"),"accepted":data.get("accepted"),"counts":data.get("counts"),"next_unproven_gate":data.get("next_unproven_gate"),"run_id_sha256":data.get("run_id_sha256")}
     return {"schema":data.get("schema")}
-
 def build(inputs:dict[str,pathlib.Path|None])->dict[str,Any]:
     structured={"preflight","session","guard","issues","ledger","run_record","run_context","pe_imports","native_modules","contract","device_template","repeatability","save_before","save_after","save_relaunch","save_verification","acceptance"};files=[];summaries={}
     for kind,path in inputs.items():
@@ -63,14 +61,7 @@ def build(inputs:dict[str,pathlib.Path|None])->dict[str,Any]:
         files.append(descriptor(path,kind))
         if kind in structured:summaries[kind]=summary(kind,load_json(path))
     present={f["kind"] for f in files};pre=summaries.get("preflight") or {};context=summaries.get("run_context") or {};contract=summaries.get("contract") or {};imports=summaries.get("pe_imports") or {};native=summaries.get("native_modules") or {};device=summaries.get("device_template") or {};repeat=summaries.get("repeatability") or {};save_verify=summaries.get("save_verification") or {};acceptance=summaries.get("acceptance") or {}
-    minimum_review={"preflight","session"}.issubset(present) and ("madeira_log" in present or bool(context.get("run_id_sha256")))
-    sealed=bool(context.get("schema")=="MADEIRA_HUNIECAM_RUN_CONTEXT_V2" and context.get("ready") and context.get("run_id_sha256") and contract.get("schema")=="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4" and contract.get("valid") and contract.get("run_context_v2_complete") and contract.get("run_id_sha256")==context.get("run_id_sha256"))
-    dependency=bool(imports.get("valid") and imports.get("file_sha256") and imports.get("file_sha256")==pre.get("exe_sha256"));native_ok=bool(native.get("valid") and native.get("module_set_sha256") and native.get("module_set_sha256")==context.get("native_module_set_sha256"))
-    device_linked=bool(device.get("schema")=="MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3" and device.get("run_id_sha256") and device.get("run_id_sha256")==context.get("run_id_sha256") and device.get("build_fingerprint_sha256")==context.get("build_fingerprint_sha256") and device.get("profile_sha256")==context.get("profile_sha256"))
-    drag_complete=bool(device_linked and device.get("drag_release_trials_complete"))
-    repeat_ok=bool(repeat.get("schema")=="MADEIRA_HUNIECAM_REPEATABILITY_V3" and repeat.get("passed") and int(repeat.get("unique_run_count") or 0)>=3 and repeat.get("build_fingerprint_sha256")==context.get("build_fingerprint_sha256") and repeat.get("profile_sha256")==context.get("profile_sha256") and repeat.get("native_module_set_sha256")==context.get("native_module_set_sha256"))
-    save_ok=bool(save_verify.get("schema")=="MADEIRA_HUNIECAM_SAVE_VERIFY_V2" and save_verify.get("same_source_directory_proven") and save_verify.get("expected_save_folder_proven") and save_verify.get("machine_gate_pass"))
-    acceptance_ok=bool(acceptance.get("schema")=="MADEIRA_HUNIECAM_ACCEPTANCE_V9" and acceptance.get("accepted") and acceptance.get("run_id_sha256")==context.get("run_id_sha256"))
+    minimum_review={"preflight","session"}.issubset(present) and ("madeira_log" in present or bool(context.get("run_id_sha256")));sealed=bool(context.get("schema")=="MADEIRA_HUNIECAM_RUN_CONTEXT_V2" and context.get("ready") and context.get("run_id_sha256") and contract.get("schema")=="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4" and contract.get("valid") and contract.get("run_context_v2_complete") and contract.get("run_id_sha256")==context.get("run_id_sha256"));dependency=bool(imports.get("valid") and imports.get("file_sha256") and imports.get("file_sha256")==pre.get("exe_sha256"));native_ok=bool(native.get("valid") and native.get("module_set_sha256") and native.get("module_set_sha256")==context.get("native_module_set_sha256"));device_linked=bool(device.get("schema")=="MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3" and device.get("run_id_sha256") and device.get("run_id_sha256")==context.get("run_id_sha256") and device.get("build_fingerprint_sha256")==context.get("build_fingerprint_sha256") and device.get("profile_sha256")==context.get("profile_sha256"));drag_complete=bool(device_linked and device.get("drag_release_trials_complete"));repeat_ok=bool(repeat.get("schema")=="MADEIRA_HUNIECAM_REPEATABILITY_V3" and repeat.get("passed") and int(repeat.get("unique_run_count") or 0)>=3 and repeat.get("build_fingerprint_sha256")==context.get("build_fingerprint_sha256") and repeat.get("profile_sha256")==context.get("profile_sha256") and repeat.get("native_module_set_sha256")==context.get("native_module_set_sha256"));save_ok=bool(save_verify.get("schema")=="MADEIRA_HUNIECAM_SAVE_VERIFY_V2" and save_verify.get("same_source_directory_proven") and save_verify.get("expected_save_folder_proven") and save_verify.get("machine_gate_pass"));acceptance_ok=bool(acceptance.get("schema")=="MADEIRA_HUNIECAM_ACCEPTANCE_V9" and acceptance.get("accepted") and acceptance.get("run_id_sha256")==context.get("run_id_sha256"))
     warnings=[];guard=summaries.get("guard") or {};session=summaries.get("session") or {}
     if guard.get("status")=="FAIL":warnings.append("The config guard rejected this run profile; do not promote it as valid evidence.")
     if pre and not pre.get("exe_sha256"):warnings.append("Preflight lacks executable SHA-256 identity.")
@@ -79,11 +70,11 @@ def build(inputs:dict[str,pathlib.Path|None])->dict[str,Any]:
     if "pe_imports" in present and not dependency:warnings.append("PE dependency audit does not validate against the owned executable identity.")
     if "native_modules" in present and not native_ok:warnings.append("Native-module audit does not match the primary run's sealed native-module-set fingerprint.")
     if "device_template" in present and not device_linked:warnings.append("Device evidence is not current V3 or is not linked to the sealed primary launch identity.")
-    if "device_template" in present and device_linked and not drag_complete:warnings.append("Current device evidence does not prove three successful HunieCam gameplay drag/releases.")
+    if "device_template" in present and device_linked and not drag_complete:warnings.append("Current device evidence does not prove three successful HunieCam gameplay drag/releases in one consistent finger-based Madeira mode.")
     if "repeatability" in present and not repeat_ok:warnings.append("Repeatability does not prove three unique current Context V2 launches on the same build/profile/native-module set.")
     if "save_verification" in present and not save_ok:warnings.append("Save evidence does not satisfy current exact-folder Save Verify V2.")
     if "acceptance" in present and acceptance.get("accepted") and not acceptance_ok:warnings.append("Acceptance claims success but does not match current Acceptance V9 primary-run requirements.")
-    return {"schema":SCHEMA,"title":"HunieCam Studio","steam_app_id":426000,"files":sorted(files,key=lambda x:x["kind"]),"summaries":summaries,"minimum_review_bundle_complete":minimum_review,"sealed_launch_identity_complete":sealed,"pe_dependency_audit_complete":dependency,"native_module_audit_complete":native_ok,"device_template_linked_to_primary_run":device_linked,"drag_release_evidence_complete":drag_complete,"cold_launch_repeatability_complete":repeat_ok,"save_machine_verification_complete":save_ok,"device_acceptance_complete":acceptance_ok,"integrity_warnings":warnings,"privacy":{"raw_logs_embedded":False,"save_contents_embedded":False,"absolute_paths_embedded":False,"credentials_embedded":False,"proprietary_binaries_embedded":False},"rule":"Final Cycle 7 manifest completion requires current sealed formats, Device Evidence V3 with three successful gameplay drag/releases, exact save persistence and three distinct cold launches. Missing evidence is never inferred."}
+    return {"schema":SCHEMA,"title":"HunieCam Studio","steam_app_id":426000,"files":sorted(files,key=lambda x:x["kind"]),"summaries":summaries,"minimum_review_bundle_complete":minimum_review,"sealed_launch_identity_complete":sealed,"pe_dependency_audit_complete":dependency,"native_module_audit_complete":native_ok,"device_template_linked_to_primary_run":device_linked,"drag_release_evidence_complete":drag_complete,"cold_launch_repeatability_complete":repeat_ok,"save_machine_verification_complete":save_ok,"device_acceptance_complete":acceptance_ok,"integrity_warnings":warnings,"privacy":{"raw_logs_embedded":False,"save_contents_embedded":False,"absolute_paths_embedded":False,"credentials_embedded":False,"proprietary_binaries_embedded":False},"rule":"Final Cycle 7 manifest completion requires current sealed formats, three successful gameplay drag/releases in one consistent finger-based Madeira mode, exact save persistence and three distinct cold launches. Missing evidence is never inferred."}
 def main()->int:
     p=argparse.ArgumentParser(description="Build a HunieCam/Madeira evidence manifest")
     for name in ("preflight","session","guard","issues","ledger","run-record","run-context","pe-imports","native-modules","contract","device-template","repeatability","save-before","save-after","save-relaunch","save-verification","acceptance","madeira-log","unity-log"):p.add_argument(f"--{name}",dest=name.replace("-","_"),type=pathlib.Path)
