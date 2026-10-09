@@ -15,8 +15,8 @@ def context(run="run-1",build="build-1",profile="profile-1",native="native-1",re
     return {"schema":schema,"ready":ready,"run_id_sha256":run,"build_fingerprint_sha256":build,"profile_sha256":profile,"guard_sha256":"guard","performance_sha256":"perf","pe_imports_sha256":"pe","native_modules_sha256":"modules","native_module_set_sha256":native}
 def contract(valid=True,run="run-1",complete=True,schema="MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4"):return {"schema":schema,"valid":valid,"run_id_sha256":run,"run_context_v2_complete":complete}
 def repeatability(passed=True,build="build-1",profile="profile-1",native="native-1",runs=("run-1","run-2","run-3"),schema="MADEIRA_HUNIECAM_REPEATABILITY_V3"):return {"schema":schema,"passed":passed,"build_fingerprint_sha256":build,"profile_sha256":profile,"native_module_set_sha256":native,"runs":[{"run_id_sha256":run} for run in runs]}
-def drag_trials(ok=True):
-    return [{"trial":i,"input_mode":"direct_finger","press_registered":True,"movement_registered":True,"release_registered":ok,"game_response_registered":ok} for i in range(1,4)]
+def drag_trials(ok=True,mode="direct_finger"):
+    return [{"trial":i,"input_mode":mode,"press_registered":True,"movement_registered":True,"release_registered":ok,"game_response_registered":ok} for i in range(1,4)]
 def full_manual_counts(run="run-1",build="build-1",profile="profile-1"):
     return {"schema":"MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3","run_id_sha256":run,"build_fingerprint_sha256":build,"profile_sha256":profile,"jit_memory_ready":True,"real_gameplay":True,"rendering_correct":True,"pointer_points_tested":9,"pointer_points_passed":9,"drag_release_trials":drag_trials(),"audio_correct":True,"save_progress_visible_after_relaunch":True,"performance_acceptable":True,"stable_minutes":30,"cold_launches":3,"suspend_resume_cycles":2,"repeatable_profile":True}
 def full_structured_manual():
@@ -34,6 +34,12 @@ class HunieCamAcceptanceTests(unittest.TestCase):
         manual=full_manual_counts();manual["drag_release_trials"][1]["release_registered"]=False;manual["drag_release_trials"][1]["game_response_registered"]=False;report=evaluate(manual=manual);self.assertEqual(next(g for g in report["gates"] if g["name"]=="drag_release_gameplay")["status"],"FAIL");self.assertFalse(report["accepted"])
     def test_unknown_release_or_game_response_never_passes(self):
         manual=full_manual_counts();manual["drag_release_trials"][0]["release_registered"]=None;report=evaluate(manual=manual);self.assertEqual(next(g for g in report["gates"] if g["name"]=="drag_release_gameplay")["status"],"UNKNOWN");manual=full_manual_counts();manual["drag_release_trials"][0]["game_response_registered"]=None;self.assertFalse(evaluate(manual=manual)["accepted"])
+    def test_hardware_mouse_drag_is_diagnostic_not_touch_acceptance(self):
+        manual=full_manual_counts();manual["drag_release_trials"]=drag_trials(mode="hardware_mouse");report=evaluate(manual=manual);self.assertEqual(next(g for g in report["gates"] if g["name"]=="drag_release_gameplay")["status"],"FAIL");self.assertFalse(report["accepted"])
+    def test_mixed_touch_modes_are_not_one_repeatable_drag_profile(self):
+        manual=full_manual_counts();manual["drag_release_trials"][1]["input_mode"]="touch_pointer";report=evaluate(manual=manual);self.assertEqual(next(g for g in report["gates"] if g["name"]=="drag_release_gameplay")["status"],"FAIL");self.assertFalse(report["accepted"])
+    def test_touch_pointer_mode_can_pass_when_used_consistently(self):
+        manual=full_manual_counts();manual["drag_release_trials"]=drag_trials(mode="touch_pointer");self.assertTrue(evaluate(manual=manual)["accepted"])
     def test_missing_manual_never_accepts(self):
         report=mod.evaluate(preflight(),session(),saves(),None,performance(),contract(),context(),repeatability());self.assertFalse(report["accepted"]);self.assertGreater(report["counts"]["UNKNOWN"],0)
     def test_wrong_run_id_blocks(self):
