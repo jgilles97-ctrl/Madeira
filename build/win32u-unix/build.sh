@@ -80,6 +80,12 @@ compile_one() {
 }
 
 echo "=== Building win32u unix (iOS) ==="
+
+# Keep the large iOS driver source close to upstream and inject only the weak
+# pVulkanInit slot assignment. The patcher fails if its exact anchors drift.
+PATCHED_DRIVER="$OBJ_DIR/driver_ios_vulkan.c"
+python3 "$BUILD_DIR/patch_driver_vulkan.py" "$BUILD_DIR/driver_ios.c" "$PATCHED_DRIVER"
+
 if [ "$VULKAN_ENABLED" -eq 1 ]; then
     echo "Vulkan: static MoltenVK ENABLED ($MOLTENVK_PREFIX)"
     # Strong references from this object to vkGet*ProcAddr force the matching
@@ -87,6 +93,14 @@ if [ "$VULKAN_ENABLED" -eq 1 ]; then
     # continues to use its normal dlfcn-shaped interface through the preinclude
     # shim below.
     compile_one "$BUILD_DIR/vulkan_static_ios.c" "vulkan_static_ios" \
+        -I"$MOLTENVK_PREFIX/include"
+
+    # Shared HWND -> CAMetalLayer lifetime adapter plus the Wine user-driver
+    # callbacks that translate VK_KHR_win32_surface to VK_EXT_metal_surface.
+    compile_one "$REPO_ROOT/build/ntdll-unix/vulkan_surface_ios.c" "vulkan_surface_ios" \
+        -I"$REPO_ROOT/build/ntdll-unix"
+    compile_one "$BUILD_DIR/vulkan_driver_ios.c" "vulkan_driver_ios" \
+        -I"$REPO_ROOT/build/ntdll-unix" \
         -I"$MOLTENVK_PREFIX/include"
 else
     echo "Vulkan: disabled (build MoltenVK first, or set MADEIRA_VULKAN=1 to require it)"
@@ -124,7 +138,7 @@ for src in $WINE_SRC/dlls/win32u/*.c $WINE_SRC/dlls/win32u/dibdrv/*.c; do
             continue
             ;;
         driver)
-            compile_one "$BUILD_DIR/driver_ios.c" "driver"
+            compile_one "$PATCHED_DRIVER" "driver"
             continue
             ;;
         message)
@@ -212,6 +226,6 @@ echo "Copying to app..."
 cp "$OBJ_DIR/libwin32u_unix.a" "$APP_LIB"
 echo "libwin32u_unix.a: $(wc -c < "$APP_LIB" | tr -d ' ') bytes"
 if [ "$VULKAN_ENABLED" -eq 1 ]; then
-    echo "Detroit Vulkan host loader: staged into libwin32u_unix.a"
+    echo "Detroit Vulkan host loader + iOS WSI driver: staged into libwin32u_unix.a"
 fi
 echo "Done!"
