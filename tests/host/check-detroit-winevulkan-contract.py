@@ -28,10 +28,11 @@ def main() -> int:
     virtual = ROOT / "build/ntdll-unix/virtual_ios.c"
 
     # The Wine guest DLLs and the Wine unix implementation are separate layers.
+    # The call-table symbol itself belongs to the generated registry, not this
+    # build script, so check the script only for build inputs/switches here.
     for needle in (
         'dlls/winevulkan/vulkan.c',
         'dlls/winevulkan/vulkan_thunks.c',
-        'winevulkan_unix_call_funcs',
         'patch_virtual_winevulkan.py',
         'MADEIRA_VULKAN',
     ):
