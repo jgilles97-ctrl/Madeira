@@ -37,13 +37,17 @@ need xcodebuild
 need make
 need cmake
 need python3
+need shasum
 
 SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+XCODE_VERSION="$(xcodebuild -version | tr '\n' ';' | sed 's/;$//')"
 echo "=== Detroit MoltenVK iOS build ==="
 echo "source:  $MOLTENVK_REPO"
 echo "release: $MOLTENVK_RELEASE_LABEL"
 echo "ref:     $MOLTENVK_REF"
-echo "sdk:     $SDK_PATH"
+echo "sdk:     $SDK_PATH ($SDK_VERSION)"
+echo "xcode:   $XCODE_VERSION"
 echo "prefix:  $PREFIX"
 
 mkdir -p "$WORK_ROOT" "$PREFIX/lib" "$PREFIX/include"
@@ -84,34 +88,81 @@ grep -q "$CACHE_PATCH_MARKER" "$SHADER_MODULE" || {
 
 # Release003 depends on matching SPIRV-Cross changes. Always run the project's
 # dependency resolver instead of reusing a random system SPIRV-Cross build.
+# Force private Metal APIs off at compile time. MoltenVK defaults this to 0, but
+# making it explicit prevents a developer shell/project setting from silently
+# producing a different renderer than the one we qualified.
+export GCC_PREPROCESSOR_DEFINITIONS='$(inherited) MVK_USE_METAL_PRIVATE_API=0'
 (
     cd "$SRC_DIR"
     ./fetchDependencies --ios --parallel-build
     make ios
 )
 
-# MoltenVK's packaging layout has changed across versions. Prefer the packaged
-# iOS static archive and fail loudly rather than silently staging the macOS or
-# simulator build.
-LIB_PATH="$(find "$SRC_DIR/Package" -type f -name 'libMoltenVK.a' -path '*iOS*' -print 2>/dev/null | head -n 1 || true)"
+candidate_is_ios_device() {
+    local candidate="$1"
+    local archs=""
+    local loads=""
+    local platforms=""
+
+    archs="$(xcrun lipo -archs "$candidate" 2>/dev/null || true)"
+    # Release003's device payload is intentionally single-architecture. Reject
+    # fat/simulator/macOS archives rather than trying to guess which slice to use.
+    if [ "$archs" != "arm64" ]; then
+        return 1
+    fi
+
+    # vtool does not reliably inspect static archives. otool does, including the
+    # LC_BUILD_VERSION carried by each Mach-O object inside libMoltenVK.a.
+    loads="$(xcrun otool -l "$candidate" 2>/dev/null || true)"
+    if [ -z "$loads" ]; then
+        return 1
+    fi
+
+    if echo "$loads" | grep -q 'LC_BUILD_VERSION'; then
+        platforms="$(printf '%s\n' "$loads" | awk '
+            /LC_BUILD_VERSION/ { in_build = 1; next }
+            in_build && /^[[:space:]]*platform[[:space:]]+/ { print $2; in_build = 0 }
+        ' | sort -u)"
+        # Mach-O PLATFORM_IOS is 2. PLATFORM_IOSSIMULATOR is 7. Every object
+        # carrying a modern build-version command must agree on device iOS.
+        if [ "$platforms" != "2" ]; then
+            return 1
+        fi
+    else
+        # Legacy fallback for objects using the older version-min command. It is
+        # still fail-closed: require iPhoneOS and reject macOS explicitly.
+        echo "$loads" | grep -q 'LC_VERSION_MIN_IPHONEOS' || return 1
+        if echo "$loads" | grep -q 'LC_VERSION_MIN_MACOSX'; then
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Packaging layout has changed across MoltenVK versions. Do not trust a folder
+# name. Inspect each produced static archive and select only a binary that proves
+# it is exactly arm64 + iPhoneOS device code.
+LIB_PATH=""
+while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    if candidate_is_ios_device "$candidate"; then
+        LIB_PATH="$candidate"
+        break
+    fi
+done < <(find "$SRC_DIR/Package" -type f -name 'libMoltenVK.a' -print 2>/dev/null | sort)
+
 if [ -z "$LIB_PATH" ]; then
-    LIB_PATH="$(find "$SRC_DIR/Package" -type f -name 'libMoltenVK.a' -print 2>/dev/null | head -n 1 || true)"
-fi
-if [ -z "$LIB_PATH" ]; then
-    echo "error: MoltenVK built, but no packaged libMoltenVK.a was found" >&2
+    echo "error: MoltenVK built, but no verified arm64 iPhoneOS libMoltenVK.a was found" >&2
+    echo "Every candidate must pass both lipo architecture and Mach-O platform checks." >&2
     echo "inspect: $SRC_DIR/Package" >&2
     exit 3
 fi
 
-# Guard against accidentally packaging a simulator or macOS slice.
-INFO="$(xcrun vtool -show-build "$LIB_PATH" 2>/dev/null || true)"
-if [ -n "$INFO" ] && echo "$INFO" | grep -Eqi 'platform (macOS|iOSSimulator)'; then
-    echo "error: refusing non-device MoltenVK archive: $LIB_PATH" >&2
-    echo "$INFO" >&2
-    exit 4
-fi
-
+ARCHS="$(xcrun lipo -archs "$LIB_PATH")"
+PLATFORM="iphoneos"
 cp -f "$LIB_PATH" "$PREFIX/lib/libMoltenVK.a"
+ARCHIVE_SHA256="$(shasum -a 256 "$PREFIX/lib/libMoltenVK.a" | awk '{print $1}')"
 
 HEADER_DIR=""
 for candidate in \
@@ -139,11 +190,21 @@ ref=$MOLTENVK_REF
 commit=$ACTUAL_COMMIT
 madeira_ipad_cache_split=1
 madeira_ipad_cache_patch=$CACHE_PATCH_MARKER
-sdk=$SDK_PATH
+platform=$PLATFORM
+architecture=$ARCHS
+private_metal_api=0
+archive_sha256=$ARCHIVE_SHA256
+sdk_path=$SDK_PATH
+sdk_version=$SDK_VERSION
+xcode_version=$XCODE_VERSION
 built_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
 echo "staged: $PREFIX/lib/libMoltenVK.a"
 echo "commit: $ACTUAL_COMMIT"
+echo "platform: $PLATFORM"
+echo "architecture: $ARCHS"
+echo "archive sha256: $ARCHIVE_SHA256"
+echo "private Metal APIs: disabled at compile time"
 echo "iPad cache split: $CACHE_PATCH_MARKER"
-echo "next: wire Wine winevulkan's unix side to this archive, then run the Vulkan probe before Detroit."
+echo "next: run the one-tap physical Vulkan qualification gate on the M4 iPad; only then launch Detroit for shader-compilation qualification."
