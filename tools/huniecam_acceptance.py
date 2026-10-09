@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Evidence-based acceptance gates for the HunieCam iPad/Madeira port.
 
-Cycle 5 makes provenance and measured performance required acceptance evidence.
-Structured pointer/cold-launch/suspend trials are preferred over aggregate
-counts. Missing evidence remains UNKNOWN and can never pass.
+Cycle 6 adds a same-launch requirement: device observations must be linked to the
+sealed run context they describe. It also understands the normalized wrapper
+emitted by huniecam_device_evidence.py. Missing evidence remains UNKNOWN and can
+never pass; machine provenance/performance gates cannot be manually overridden.
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V4"
+SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V5"
 POINTER_POINTS = {
     "top_left", "top_center", "top_right",
     "middle_left", "center", "middle_right",
@@ -26,17 +27,28 @@ def load(path: pathlib.Path | None) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def manual_bool(manual: dict[str, Any] | None, key: str) -> bool | None:
-    if not manual or key not in manual:
+def _manual_payload(manual: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not manual:
         return None
-    value = manual[key]
+    normalized = manual.get("normalized")
+    if isinstance(normalized, dict):
+        return normalized
+    return manual
+
+
+def manual_bool(manual: dict[str, Any] | None, key: str) -> bool | None:
+    payload = _manual_payload(manual)
+    if not payload or key not in payload:
+        return None
+    value = payload[key]
     return value if isinstance(value, bool) else None
 
 
 def number(manual: dict[str, Any] | None, key: str) -> float | None:
-    if not manual or key not in manual:
+    payload = _manual_payload(manual)
+    if not payload or key not in payload:
         return None
-    value = manual[key]
+    value = payload[key]
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
@@ -50,9 +62,10 @@ def threshold_or_legacy(manual: dict[str, Any] | None, numeric_key: str, minimum
 
 
 def pointer_gate(manual: dict[str, Any] | None) -> bool | None:
-    if manual and isinstance(manual.get("pointer_grid"), list):
+    payload = _manual_payload(manual)
+    if payload and isinstance(payload.get("pointer_grid"), list):
         seen: dict[str, bool | None] = {}
-        for item in manual["pointer_grid"]:
+        for item in payload["pointer_grid"]:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("point", ""))
@@ -67,19 +80,20 @@ def pointer_gate(manual: dict[str, Any] | None) -> bool | None:
             return None
         return True
 
-    tested = number(manual, "pointer_points_tested")
-    passed = number(manual, "pointer_points_passed")
+    tested = number(payload, "pointer_points_tested")
+    passed = number(payload, "pointer_points_passed")
     if tested is not None or passed is not None:
         if tested is None or passed is None:
             return None
         return tested >= 9 and passed == tested
-    return manual_bool(manual, "pointer_aligned")
+    return manual_bool(payload, "pointer_aligned")
 
 
 def trial_gate(manual: dict[str, Any] | None, list_key: str, minimum: int, numeric_key: str, legacy_key: str) -> bool | None:
-    if manual and isinstance(manual.get(list_key), list):
+    payload = _manual_payload(manual)
+    if payload and isinstance(payload.get(list_key), list):
         values: list[bool | None] = []
-        for item in manual[list_key]:
+        for item in payload[list_key]:
             if not isinstance(item, dict):
                 continue
             value = item.get("success")
@@ -92,7 +106,26 @@ def trial_gate(manual: dict[str, Any] | None, list_key: str, minimum: int, numer
         if any(v is None for v in required):
             return None
         return True
-    return threshold_or_legacy(manual, numeric_key, minimum, legacy_key)
+    return threshold_or_legacy(payload, numeric_key, minimum, legacy_key)
+
+
+def device_run_link(manual: dict[str, Any] | None, run_context: dict[str, Any] | None) -> bool | None:
+    payload = _manual_payload(manual)
+    if not payload or not run_context:
+        return None
+    expected = (
+        run_context.get("run_id_sha256"),
+        run_context.get("build_fingerprint_sha256"),
+        run_context.get("profile_sha256"),
+    )
+    observed = (
+        payload.get("run_id_sha256"),
+        payload.get("build_fingerprint_sha256"),
+        payload.get("profile_sha256"),
+    )
+    if any(not x for x in expected) or any(not x for x in observed):
+        return None
+    return observed == expected
 
 
 def gate(name: str, value: bool | None, evidence: str, required: bool = True) -> dict[str, Any]:
@@ -111,6 +144,7 @@ def evaluate(
     manual: dict[str, Any] | None,
     performance: dict[str, Any] | None = None,
     evidence_contract: dict[str, Any] | None = None,
+    run_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     gates: list[dict[str, Any]] = []
 
@@ -123,7 +157,13 @@ def evaluate(
 
     contract_ok = None if evidence_contract is None else bool(evidence_contract.get("valid"))
     gates.append(gate("evidence_contract_valid", contract_ok,
-                      "Cycle 5 evidence contract proves the supplied files use supported schemas and agree on the owned executable/build provenance."))
+                      "Evidence contract proves supported schemas and consistent owned-build/profile/run provenance."))
+
+    context_ok = None if run_context is None else bool(run_context.get("ready") and run_context.get("run_id_sha256"))
+    gates.append(gate("run_context_ready", context_ok,
+                      "Cycle 6 run context seals this exact structured session/run record and Madeira/Unity log pair to one launch ID."))
+    gates.append(gate("device_evidence_same_run", device_run_link(manual, run_context),
+                      "Device observation form must carry the same run ID, owned-build fingerprint and launch-profile fingerprint as the sealed run context."))
 
     gates.append(gate("jit_and_memory_ready", manual_bool(manual, "jit_memory_ready"),
                       "Device observation: Madeira showed JIT and Memory+ ready before launch."))
@@ -184,11 +224,12 @@ def evaluate(
         "schema": SCHEMA,
         "overall": overall,
         "accepted": complete,
+        "run_id_sha256": run_context.get("run_id_sha256") if run_context else None,
         "counts": counts,
         "next_unproven_gate": next_gate,
         "gates": gates,
         "thresholds": {"pointer_points": 9, "stable_minutes": 30, "cold_launches": 3, "suspend_resume_cycles": 2},
-        "rule": "Unknown is never pass. Acceptance also requires valid cross-file provenance and clean automated performance evidence; manual observations cannot override those machine gates.",
+        "rule": "Unknown is never pass. Final acceptance requires same-launch device observations, valid cross-file provenance and clean automated performance; manual observations cannot override machine gates.",
     }
 
 
@@ -198,14 +239,15 @@ def main() -> int:
     parser.add_argument("--session", type=pathlib.Path)
     parser.add_argument("--save-verification", type=pathlib.Path,
                         help="JSON from huniecam_save_probe.py verify BEFORE AFTER RELAUNCH")
-    parser.add_argument("--manual", type=pathlib.Path, help="Structured JSON from huniecam_device_evidence.py or compatible observations")
+    parser.add_argument("--manual", type=pathlib.Path, help="Structured/normalized JSON from huniecam_device_evidence.py")
     parser.add_argument("--performance", type=pathlib.Path, help="JSON from huniecam_performance.py")
     parser.add_argument("--evidence-contract", type=pathlib.Path, help="JSON from huniecam_evidence_contract.py")
+    parser.add_argument("--run-context", type=pathlib.Path, help="Sealed JSON from huniecam_run_context.py")
     parser.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = parser.parse_args()
     report = evaluate(
         load(args.preflight), load(args.session), load(args.save_verification), load(args.manual),
-        load(args.performance), load(args.evidence_contract),
+        load(args.performance), load(args.evidence_contract), load(args.run_context),
     )
     rendered = json.dumps(report, indent=2, sort_keys=True)
     if args.json_path:
