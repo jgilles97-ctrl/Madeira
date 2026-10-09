@@ -5,10 +5,8 @@ Cycle 6 closes a provenance gap left after build/profile locking: two launches c
 use the same owned binary and the same settings but still produce different logs.
 A run context hashes the exact structured session, exact run record and exact
 Madeira/Unity log text. Downstream tools can then refuse evidence accidentally
-mixed across separate launches.
-
-This tool is read-only and stores no raw log text, absolute paths, credentials or
-game content.
+mixed across separate launches. A small stage summary is exposed for repeatability
+checks without embedding raw logs.
 """
 from __future__ import annotations
 
@@ -80,6 +78,8 @@ def build(
         "unity_log_text_sha256": unity["text_sha256"] if unity["present"] else None,
     }
     run_id = _sha_json(material) if build_fp and profile_fp and session_sha and record_sha and madeira["present"] else None
+    failure_codes = sorted({str(x.get("code")) for x in sess.get("failures", []) if isinstance(x, dict) and x.get("code")})
+    marker_codes = sorted({str(x.get("code")) for x in sess.get("markers", []) if isinstance(x, dict) and x.get("code")})
     return {
         "schema": SCHEMA,
         "title": "HunieCam Studio",
@@ -89,6 +89,13 @@ def build(
         "profile_sha256": profile_fp,
         "session_sha256": session_sha,
         "run_record_sha256": record_sha,
+        "session_summary": {
+            "schema": sess.get("schema"),
+            "deepest_stage": int(sess.get("deepest_stage", 0)) if sess else 0,
+            "deepest_stage_name": sess.get("deepest_stage_name"),
+            "failure_codes": failure_codes,
+            "marker_codes": marker_codes,
+        },
         "logs": {"madeira": madeira, "unity": unity},
         "material": material,
         "ready": not errors,
