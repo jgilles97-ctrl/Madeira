@@ -5,7 +5,8 @@ This does not pretend to execute an iPad. It protects the properties that make
 our eventual physical-device result meaningful: strict ordered Windows canaries,
 finite recovery, durable proof only after 120 presented frames, foreground-only
 qualification, binding to both the exact x64 canaries and the exact local
-MoltenVK/Wine/FEX/iOS bridge runtime, and a deliberately narrow one-tap route.
+MoltenVK/Wine/FEX/iOS bridge runtime, a plain-language proof-status diagnosis,
+and a deliberately narrow one-tap route.
 """
 
 from pathlib import Path
@@ -155,7 +156,9 @@ def main() -> None:
     require(app, "resolvedSystem32.path.hasPrefix(drive.path + \"/\")", "system32 containment check")
     require(app, "ShortcutRouter.shared.pendingExe = entry.windowsPath", "reuse of normal library launch route")
     require(app, "env.MADEIRA_DEVICE_STATS = 1", "device memory telemetry profile")
-    require(app, "env.MVK_DTR_MSL_LIBRARY_CACHE = 0", "8 GB memory-first shader-cache profile")
+    require(app, "env.MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM = 3", "Detroit shader compression profile")
+    require(app, "env.MVK_DTR_MSL_LIBRARY_CACHE = 0", "8 GB RAM-cache-off profile")
+    require(app, "env.MVK_DTR_MSL_LIBRARY_DISK_CACHE = 1", "persistent disk-cache-on profile")
     if "wine_process_start(" in app:
         raise AssertionError("one-tap Detroit UI must not bypass Madeira's normal JIT/library launch sequence")
     if "queryItems" in app or "URLComponents" in app:
@@ -178,7 +181,30 @@ def main() -> None:
     require(app, "wine_process_is_running() != 0", "only-running-test invalidation scope")
     require(app, "@Environment(\\.scenePhase)", "scene phase observation")
     require(app, "if phase != .active", "inactive/background invalidation trigger")
-    require(app, "!FileManager.default.fileExists(atPath: DetroitVulkanDeviceGateLauncher.foregroundInvalidationURL.path)", "proof rejects foreground marker")
+
+    # A Boolean alone is not enough for the first real-device session. Preserve
+    # distinct, actionable status classes for no proof, foreground loss, stale
+    # runtime, malformed/old proof, non-physical proof, incomplete pass, and a
+    # current verified pass.
+    for needle, label in (
+        ("enum Status: Equatable", "typed physical proof status"),
+        ("case passed", "passed proof state"),
+        ("case notRun", "never-run proof state"),
+        ("case foregroundLost", "foreground-loss proof state"),
+        ("case malformedProof", "malformed proof state"),
+        ("case wrongSchema", "old-schema proof state"),
+        ("case wrongArchitecture", "wrong-architecture proof state"),
+        ("case notPhysicalDevice", "non-physical proof state"),
+        ("case incompletePass", "incomplete pass state"),
+        ("case currentPayloadUnreadable", "unreadable current payload state"),
+        ("case payloadChanged", "runtime/payload changed state"),
+        ("The local graphics runtime changed since the last pass", "plain stale-runtime explanation"),
+        ("The previous test left the foreground", "plain foreground explanation"),
+        ("Not yet proven on this iPad", "plain not-run explanation"),
+        ("static var validForCurrentPayload: Bool { status.passed }", "boolean compatibility from typed status"),
+        ("Text(status.explanation)", "visible proof-status explanation"),
+    ):
+        require(app, needle, label)
 
     require(shortcuts, 'url.host?.lowercased() == "play"', "existing play-only shortcut parser")
     require(shortcuts, '@Published var pendingExe: String?', "existing pending library executable route")
@@ -187,6 +213,7 @@ def main() -> None:
     print("PASS: durable proof is cleared first and published only after full physical pass")
     print("PASS: physical proof is tied to the current x64 canaries and local graphics/runtime build")
     print("PASS: physical proof is rejected if Madeira leaves the foreground during the gate")
+    print("PASS: proof failures are explained on-device instead of collapsing to an opaque Boolean")
     print("PASS: one-tap iPad gate remains fixed, x64-verified, contained, and library-routed")
 
 
