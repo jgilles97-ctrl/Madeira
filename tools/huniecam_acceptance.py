@@ -13,7 +13,7 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V1"
+SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V2"
 
 
 def load(path: pathlib.Path | None) -> dict[str, Any] | None:
@@ -41,8 +41,7 @@ def gate(name: str, value: bool | None, evidence: str, required: bool = True) ->
 def evaluate(
     preflight: dict[str, Any] | None,
     session: dict[str, Any] | None,
-    save_after: dict[str, Any] | None,
-    save_relaunch: dict[str, Any] | None,
+    save_verification: dict[str, Any] | None,
     manual: dict[str, Any] | None,
 ) -> dict[str, Any]:
     gates: list[dict[str, Any]] = []
@@ -83,25 +82,27 @@ def evaluate(
     gates.append(gate("audio_correct", audio,
                       "Manual observation: music/effects were present and stable without persistent crackle/latency."))
 
-    save_written = None
-    if save_after:
-        save_written = bool(save_after.get("progress_write_detected")) if "progress_write_detected" in save_after else None
-    gates.append(gate("save_write_detected", save_written,
-                      "Save compare detected at least one legitimate tree change after visible progress."))
-
+    write_detected = None
     persistence = None
-    if save_after and save_relaunch:
-        # The post-progress snapshot must match the post-relaunch snapshot.
-        after_tree = save_after.get("tree_sha256")
-        relaunch_tree = save_relaunch.get("tree_sha256")
-        if after_tree is not None and relaunch_tree is not None:
-            persistence = after_tree == relaunch_tree
+    save_machine_gate = None
+    if save_verification:
+        if "progress_write_detected" in save_verification:
+            write_detected = bool(save_verification.get("progress_write_detected"))
+        if "save_tree_survived_relaunch" in save_verification:
+            persistence = bool(save_verification.get("save_tree_survived_relaunch"))
+        if "machine_gate_pass" in save_verification:
+            save_machine_gate = bool(save_verification.get("machine_gate_pass"))
+
+    gates.append(gate("save_write_detected", write_detected,
+                      "Three-stage save verification must detect a real before→after tree change after visible progress."))
     gates.append(gate("save_survives_relaunch", persistence,
-                      "Post-progress and post-relaunch save snapshots must have the same aggregate tree hash."))
+                      "The exact post-progress save tree must still be present after a full Madeira/game relaunch."))
+    gates.append(gate("save_machine_verification", save_machine_gate,
+                      "Save verification passes only when progress was written AND the post-progress tree survived relaunch."))
 
     save_visible = manual_value(manual, "save_progress_visible_after_relaunch")
     gates.append(gate("save_progress_visible_after_relaunch", save_visible,
-                      "Manual observation: the relaunched game visibly restored the same progress."))
+                      "Manual observation: the relaunched game visibly restored the same progress. Matching files alone are not enough."))
 
     performance = manual_value(manual, "performance_acceptable")
     gates.append(gate("performance_acceptable", performance,
@@ -149,13 +150,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate HunieCam iPad/Madeira acceptance gates")
     parser.add_argument("--preflight", type=pathlib.Path)
     parser.add_argument("--session", type=pathlib.Path)
-    parser.add_argument("--save-after", type=pathlib.Path)
-    parser.add_argument("--save-relaunch", type=pathlib.Path)
+    parser.add_argument("--save-verification", type=pathlib.Path,
+                        help="JSON from huniecam_save_probe.py verify BEFORE AFTER RELAUNCH")
     parser.add_argument("--manual", type=pathlib.Path, help="JSON booleans for device-observation gates")
     parser.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = parser.parse_args()
 
-    report = evaluate(load(args.preflight), load(args.session), load(args.save_after), load(args.save_relaunch), load(args.manual))
+    report = evaluate(load(args.preflight), load(args.session), load(args.save_verification), load(args.manual))
     rendered = json.dumps(report, indent=2, sort_keys=True)
     if args.json_path:
         args.json_path.write_text(rendered + "\n", encoding="utf-8")
