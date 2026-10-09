@@ -2,10 +2,6 @@
 # Build Wine's win32u unix side as a static lib for iOS (aarch64).
 # Mirrors build/ntdll-unix/build.sh — compiles unpatched upstream .c files
 # with iOS clang, per-file overrides go in this dir.
-#
-# Phase 3D step 1: just get every file compiling. All SONAME_LIB*
-# deps (freetype, fontconfig, egl, vulkan) forced undefined for now;
-# those code paths fall back to stubs.
 set -e
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +20,25 @@ FAILED=0
 FAILED_FILES=""
 
 FREETYPE_DIR="$REPO_ROOT/build/freetype-ios"
+MOLTENVK_PREFIX="${MOLTENVK_IOS_PREFIX:-$REPO_ROOT/toolchains/moltenvk-detroit-ios}"
+VULKAN_MODE="${MADEIRA_VULKAN:-auto}"
+VULKAN_ENABLED=0
+
+# Detroit path: opt in automatically once the iOS MoltenVK archive produced by
+# build/moltenvk-ios/build.sh is present. MADEIRA_VULKAN=0 forces the historical
+# Vulkan-disabled build; MADEIRA_VULKAN=1 requires MoltenVK and fails early if
+# staging is incomplete. This keeps normal Madeira builds reversible.
+if [ "$VULKAN_MODE" != "0" ]; then
+    if [ -f "$MOLTENVK_PREFIX/lib/libMoltenVK.a" ] && \
+       [ -f "$MOLTENVK_PREFIX/include/vulkan/vulkan.h" ]; then
+        VULKAN_ENABLED=1
+    elif [ "$VULKAN_MODE" = "1" ]; then
+        echo "error: MADEIRA_VULKAN=1 but MoltenVK iOS staging is incomplete" >&2
+        echo "expected: $MOLTENVK_PREFIX/lib/libMoltenVK.a" >&2
+        echo "run: build/moltenvk-ios/build.sh" >&2
+        exit 2
+    fi
+fi
 
 compile_one() {
     local src=$1
@@ -65,6 +80,17 @@ compile_one() {
 }
 
 echo "=== Building win32u unix (iOS) ==="
+if [ "$VULKAN_ENABLED" -eq 1 ]; then
+    echo "Vulkan: static MoltenVK ENABLED ($MOLTENVK_PREFIX)"
+    # Strong references from this object to vkGet*ProcAddr force the matching
+    # MoltenVK archive members into the final app link. Wine's vulkan.c itself
+    # continues to use its normal dlfcn-shaped interface through the preinclude
+    # shim below.
+    compile_one "$BUILD_DIR/vulkan_static_ios.c" "vulkan_static_ios" \
+        -I"$MOLTENVK_PREFIX/include"
+else
+    echo "Vulkan: disabled (build MoltenVK first, or set MADEIRA_VULKAN=1 to require it)"
+fi
 
 # All *.c files except main.c (main.c is the PE side entry — lives in win32u.dll).
 # dibdrv/*.c compile as their own translation units.
@@ -127,6 +153,20 @@ for src in $WINE_SRC/dlls/win32u/*.c $WINE_SRC/dlls/win32u/dibdrv/*.c; do
                 -I"$REPO_ROOT/research/freetype/include"
             continue
             ;;
+        vulkan)
+            if [ "$VULKAN_ENABLED" -eq 1 ]; then
+                # Wine's Vulkan translation remains upstream. Only replace the
+                # desktop dlopen/dlsym loader with our statically linked MoltenVK
+                # adapter and make SONAME_LIBVULKAN take the supported path.
+                compile_one "$src" "vulkan" \
+                    -I"$MOLTENVK_PREFIX/include" \
+                    -include "$BUILD_DIR/vulkan_static_ios.h" \
+                    -DSONAME_LIBVULKAN=\"madeira-moltenvk-static\"
+            else
+                compile_one "$src" "vulkan"
+            fi
+            continue
+            ;;
     esac
 
     compile_one "$src" "$name"
@@ -148,16 +188,30 @@ echo ""
 echo "=== Building libwin32u_unix.a ==="
 ar rcs "$OBJ_DIR/libwin32u_unix.a" "$OBJ_DIR"/*.o
 
-# Merge the static freetype so the app link needs no project changes.
+# Merge third-party static archives into one app-facing archive. This preserves
+# Madeira's current Xcode project contract: it already links libwin32u_unix.a.
+EXTRA_ARCHIVES=()
 if [ -f "$FREETYPE_DIR/build/libfreetype.a" ]; then
-    libtool -static -o "$OBJ_DIR/libwin32u_unix.a" \
-        "$OBJ_DIR/libwin32u_unix.a" "$FREETYPE_DIR/build/libfreetype.a" 2>/dev/null
-    echo "merged libfreetype.a"
+    EXTRA_ARCHIVES+=("$FREETYPE_DIR/build/libfreetype.a")
+    echo "will merge libfreetype.a"
 else
     echo "WARNING: no libfreetype.a — fonts will be disabled"
+fi
+if [ "$VULKAN_ENABLED" -eq 1 ]; then
+    EXTRA_ARCHIVES+=("$MOLTENVK_PREFIX/lib/libMoltenVK.a")
+    echo "will merge libMoltenVK.a"
+fi
+
+if [ ${#EXTRA_ARCHIVES[@]} -gt 0 ]; then
+    libtool -static -o "$OBJ_DIR/libwin32u_unix.merged.a" \
+        "$OBJ_DIR/libwin32u_unix.a" "${EXTRA_ARCHIVES[@]}"
+    mv -f "$OBJ_DIR/libwin32u_unix.merged.a" "$OBJ_DIR/libwin32u_unix.a"
 fi
 
 echo "Copying to app..."
 cp "$OBJ_DIR/libwin32u_unix.a" "$APP_LIB"
 echo "libwin32u_unix.a: $(wc -c < "$APP_LIB" | tr -d ' ') bytes"
+if [ "$VULKAN_ENABLED" -eq 1 ]; then
+    echo "Detroit Vulkan host loader: staged into libwin32u_unix.a"
+fi
 echo "Done!"
