@@ -1,272 +1,368 @@
 # HunieCam Studio on iPad through Madeira
 
-Status: compatibility workbench, not a success claim. The goal is a real local iPad run of the legitimately owned Windows game through Madeira. Streaming is not part of this route.
+**Status:** compatibility workbench; **not yet a playability claim**.
 
-## Plain-English goal
+The goal is to run a legitimately owned Windows copy of **HunieCam Studio** locally on an M-series iPad through Madeira. Streaming does not count. A logo, menu, or one lucky launch does not count. Final success requires the physical iPad to pass the hard acceptance gates in this guide.
 
-Make the Windows copy of **HunieCam Studio** run locally on an iPad using Madeira, with the game itself unchanged. A successful result means more than seeing a logo or menu: gameplay has to work, taps/clicks have to land correctly, sound must work, saves must survive a restart, and repeated launches must stay stable.
+For the detailed research history, see `HUNIECAM_CYCLE_2.md` through `HUNIECAM_CYCLE_7.md`.
 
-Do not call the project complete until the acceptance gates near the end of this document pass on the actual iPad.
+## Plain-English target
 
-## Why this title is a promising Madeira target
+The final result must prove all of these on the iPad:
 
-Public title metadata and the Windows depot point to a relatively small, old Unity game:
+- the real Windows game launches locally;
+- a real management/gameplay session works;
+- taps/pointer positions are accurate across the whole screen;
+- **dragging a character and releasing it actually completes the action**;
+- rendering and audio are correct;
+- a disposable save survives a full Madeira/game restart and visibly restores progress;
+- the intended 60 FPS test cap is actually measured;
+- the game remains stable for at least 30 minutes;
+- three independent cold launches work;
+- two suspend/resume tests work;
+- the same final profile is repeatable.
 
-- Steam app ID: `426000`.
-- Windows executable: `HunieCamStudio.exe`.
-- Steam's published minimum is Windows XP SP2+, 1.2 GHz, 2 GB RAM, a DirectX 9-compatible GPU, DirectX 9.0a, and 1 GB of storage.
-- The Windows build is reported as 32-bit x86 and uses Unity/Mono.
-- The depot contains Unity's managed assembly layout plus `mono.dll`, `steam_api.dll`, and `CSteamworks.dll`.
-- Public compatibility metadata identifies Unity `5.3.4f1` and Direct3D 9.
+Unknown evidence never counts as success.
 
-Those properties line up with parts Madeira now has specifically for older games: WoW64/i386 execution through FEX, a Direct3D 9 path through DXMT to Metal, Windows mouse/keyboard bridging, and per-game settings.
+## Authoritative runtime baseline
 
-References used for the title facts:
+This branch is based on upstream Madeira:
+
+`48f976429c189f8396e23d251d8a82f43c705922`
+
+Cycle 7 rechecked the upstream `main` branch directly through GitHub; it still points to that October 6, 2026 commit. Do not tune HunieCam against an older fork/runtime and mistake an already-fixed Madeira bug for a title-specific problem.
+
+PR #4 intentionally remains draft until the device gates pass.
+
+## Known title shape
+
+Public title/depot evidence points to an old, comparatively small Unity game:
+
+- Steam app ID: `426000`;
+- Windows executable: `HunieCamStudio.exe`;
+- Windows build: 32-bit x86 in the known Steam depot;
+- engine/runtime family: classic Unity/Mono, publicly identified as Unity `5.3.4f1`;
+- the game carries its own Unity Mono runtime under `HunieCamStudio_Data/Mono/mono.dll`;
+- configuration is expected under `HKCU\Software\HuniePot\HunieCam Studio`;
+- saves are expected under `%USERPROFILE%\AppData\LocalLow\HuniePot\HunieCam Studio\`;
+- the title is publicly documented as not having its own FPS cap.
+
+References:
 
 - https://store.steampowered.com/app/426000/
 - https://steamdb.info/app/426000/
 - https://www.pcgamingwiki.com/wiki/HunieCam_Studio
 
-The local probe in `tools/huniecam_probe.py` must still verify the actual owned copy. Public metadata is guidance, not proof that every store/build has the same executable.
+The owned files always outrank web metadata. `tools/huniecam_probe.py` records the actual executable architecture/hashes and runtime layout before a serious test is promoted.
 
-## Current runtime baseline
+## Important Cycle 7 input risk
 
-This compatibility branch starts from upstream Madeira commit:
+PCGamingWiki currently notes a Windows touchscreen/stylus problem that is especially relevant to HunieCam: the game relies heavily on dragging portraits, and touch can move the portrait while **release fails to register**.
 
-`48f976429c189f8396e23d251d8a82f43c705922`
+That report is **not proof the same bug exists on iPad/Madeira**. It is why Cycle 7 now has a mandatory title-specific device test.
 
-Do not test HunieCam on the fork's older October 2 runtime and then tune around failures that upstream has already fixed. Between that fork point and this baseline, upstream gained substantial JIT, WoW64, input, graphics, and Unity/Mono work.
+For three separate real gameplay drags, Device Evidence V3 records four facts independently:
 
-In particular, recent upstream work is directly relevant to Unity/Mono protected-memory writes. Issue `willfaust/Madeira#123` documented Unity/Mono and other managed runtimes failing on unhandled stores into RWX/JIT-backed memory. Later October 6 commits added handling for indexed pair stores and exclusive `STXR/STLXR` patterns. This does not prove HunieCam works; it means a current runtime must be the starting point before title-specific changes are justified.
+1. press registered;
+2. movement registered;
+3. release registered;
+4. the game reacted to the completed drag.
 
-## The expected execution path
+All four must be true on all three trials. A normal tap/pointer grid cannot substitute for this test.
 
-If the owned executable verifies as i386, the expected path is:
+## Expected local execution path
+
+For the known 32-bit Windows build:
 
 `HunieCamStudio.exe (x86)`
-→ Madeira WoW64 guest window
-→ FEX translates x86 code to ARM64
-→ Wine supplies the Windows APIs
-→ Unity/Mono runs inside that Windows environment
-→ Direct3D 9 goes through DXMT
-→ Metal draws the image on iPad
+→ Madeira WoW64/i386 guest execution
+→ FEX translates x86 instructions for ARM64
+→ Wine supplies Windows APIs
+→ HunieCam's bundled Unity/Mono runtime runs
+→ the selected Direct3D path is translated to Metal
+→ the iPad displays the game.
 
-Nothing here recompiles or modifies the proprietary game.
+Nothing in this project recompiles or redistributes the proprietary game.
 
-For graphics, use Madeira's **default D3D9 route first**. Only after a clean baseline should `d3d9 = native` be A/B tested as a single-variable experiment. Do not change five switches at once; that makes a good or bad result impossible to explain.
+## Clean first physical-iPad profile
 
-## Input strategy
+Start with **no title-specific workaround**:
 
-HunieCam is mostly a pointer-driven management game. Treat it like a mouse/touch application first, not a controller game.
+- executable: `HunieCamStudio.exe`;
+- launch route: direct game launch first;
+- working directory: game/program folder;
+- resolution: **1280×720**;
+- display mode: **Fit**;
+- intended FPS cap: **60 FPS**;
+- launch arguments: **none**;
+- per-game compatibility config: **empty/default**;
+- renderer override: **none**;
+- JIT + Memory+: verified ready before launch.
 
-Baseline input order:
+The renderer-neutral rule is important. Let the owned Unity player select its renderer and record the actual result in Unity's `output_log.txt`. A clean Direct3D 11 selection is not automatically wrong.
 
-1. Direct iPad pointer/tap behavior on the game view.
-2. iPad trackpad or mouse if available, because Madeira already maps the visible Windows cursor to the iPad pointer.
-3. Keyboard only where the game actually needs it.
-4. Controller-to-mouse binding only as an optional convenience after basic input passes.
-5. Do not require XInput for acceptance.
+## What to collect after one launch
 
-The critical device test is not merely "a tap produces a click." Check the full screen: corners, small buttons, drag-like interactions if any, menus, and any resolution/aspect-ratio change. A cursor that is a few pixels off can make the game look playable while still being frustrating.
+Keep the original evidence. Do not hand-edit reports to make them pass.
 
-## Save-data rule
+At minimum collect:
 
-The expected Windows save family is under the Wine user's `AppData\LocalLow\HuniePot\HunieCam Studio` area. Never use Joey's only active save as the first compatibility test.
+- `madeira-log.txt`;
+- `HunieCamStudio_Data/output_log.txt` if Unity created it;
+- the exact current game folder/preflight;
+- the exact config/arguments used;
+- measured FPS/device-state evidence where available.
 
-Use a disposable test save and verify:
-
-1. launch;
-2. create visible progress;
-3. exit the game normally;
-4. confirm the save path contains updated data;
-5. fully close/relaunch Madeira;
-6. start the game again;
-7. confirm the same progress returns.
-
-Preserve the prefix and saves across app rebuild/reinstall tests unless the purpose of that test is explicitly migration/recovery.
-
-## Steam versus direct launch
-
-The Windows depot contains Steamworks libraries. That does **not** mean every first test must go through the full Windows Steam client.
-
-Use two separate questions:
-
-- **Game compatibility:** can the owned `HunieCamStudio.exe` start and play in the Madeira library path?
-- **Steam integration:** if the owned copy requires Steam behavior, can Madeira Dock provide what it needs?
-
-Start with the simplest legitimate route available for the user's owned copy. If a direct library launch reaches the game but a Dock launch does not, the blocker is the launch/Steam layer, not necessarily Unity, FEX, or D3D9. Keep those diagnoses separate.
-
-Do not bypass ownership checks or replace Steam files with cracked material. If the user's store build requires Steam, solve the legitimate Steam/Dock path.
-
-## Preflight tool
-
-Run from the repository root on the Mac against the owned Windows install:
+Run the current one-command evidence pipeline from the repository root:
 
 ```sh
-python3 tools/huniecam_probe.py "/path/to/HunieCam Studio" --json huniecam-preflight.json
+python3 tools/huniecam_pipeline.py \
+  --install "/path/to/HunieCam Studio" \
+  --madeira-log "/path/to/madeira-log.txt" \
+  --unity-log "/path/to/HunieCamStudio_Data/output_log.txt" \
+  --out-dir huniecam-evidence
 ```
 
-The probe is read-only. It checks:
+If no Unity log exists, omit `--unity-log` rather than inventing one.
 
-- `HunieCamStudio.exe` exists;
-- the PE architecture from the executable header;
-- Unity managed-code and Mono signals;
-- Steamworks DLL signals;
-- Unity version strings when present;
-- hashes for the executable and a few identity files;
-- the recommended Madeira CPU, graphics and input route.
+Pipeline V8 produces the current sealed evidence set, including:
 
-A hash identifies the exact tested build without redistributing the game.
+- owned-build preflight;
+- config guard;
+- session diagnosis;
+- known upstream-issue matching;
+- performance/FPS-cap/device-state analysis;
+- first-failure capsule;
+- provenance-locked run record;
+- PE-import audit;
+- bundled native-module audit;
+- conservative dependency plan;
+- Run Context V2 with exact per-launch identity;
+- Evidence Contract V4;
+- next-run decision;
+- Manifest V6;
+- a Device Evidence V3 template already linked to that exact run ID.
 
-Do not hand-edit the probe result to make a gate pass. If the actual build disagrees with the public metadata, update the plan from the actual evidence.
+Do not reuse that generated device form for another launch.
 
-## First launch procedure
+## Current evidence versions
 
-1. Use a build from this branch or a later upstream-equivalent branch that contains its needed changes.
-2. In Madeira Settings, confirm JIT and Memory+ are ready.
-3. Add the owned Windows executable as an isolated library entry.
-4. Keep per-game compatibility settings empty/default for the first attempt.
-5. Launch once.
-6. Record exactly how far it gets: no window, Unity splash, main menu, new game, interactive gameplay, etc.
-7. Export `madeira-log.txt` immediately after the attempt.
-8. Run:
+The schema audit intentionally fails CI if these current producers/consumers silently drift:
 
-```sh
-python3 tools/madeira_log_triage.py madeira-log.txt --json huniecam-triage.json
+| Evidence | Current format |
+|---|---|
+| Preflight | `MADEIRA_HUNIECAM_PROBE_V4` |
+| Session | `MADEIRA_HUNIECAM_SESSION_V3` |
+| Config guard | `MADEIRA_HUNIECAM_CONFIG_GUARD_V2` |
+| Performance | `MADEIRA_HUNIECAM_PERFORMANCE_V2` |
+| Run record | `MADEIRA_HUNIECAM_RUN_RECORD_V1` |
+| Run context | `MADEIRA_HUNIECAM_RUN_CONTEXT_V2` |
+| PE imports | `MADEIRA_HUNIECAM_PE_IMPORTS_V1` |
+| Native modules | `MADEIRA_HUNIECAM_NATIVE_MODULES_V1` |
+| Device evidence | `MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3` |
+| Save verify | `MADEIRA_HUNIECAM_SAVE_VERIFY_V2` |
+| Repeatability | `MADEIRA_HUNIECAM_REPEATABILITY_V3` |
+| Evidence contract | `MADEIRA_HUNIECAM_EVIDENCE_CONTRACT_V4` |
+| Acceptance | `MADEIRA_HUNIECAM_ACCEPTANCE_V9` |
+| Manifest | `MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V6` |
+| Pipeline | `MADEIRA_HUNIECAM_PIPELINE_V8` |
+
+## Evidence-first triage order
+
+Always fix the **earliest real blocker**. Do not stack speculative switches.
+
+### 1. JIT/Memory+ prerequisite fails
+
+Stop. That run cannot establish HunieCam compatibility. Repair the Madeira prerequisite, then repeat the unchanged clean profile.
+
+### 2. WoW64/address-space refusal
+
+Treat this as a runtime/address-space problem, not as ordinary RAM shortage and not as a reason to add random game options. Keep the exact address/mapping evidence.
+
+### 3. Missing DLL
+
+Use the current PE/native-module tools to decide what actually requested the DLL.
+
+The dependency plan distinguishes:
+
+- direct executable import;
+- bundled native/plugin requester;
+- dynamic/indirect missing dependency;
+- no missing-DLL evidence.
+
+Do not install a pile of Visual C++, DirectX, .NET, Wine Mono or DLL overrides because they are common Wine fixes. A dependency change needs exact evidence.
+
+### 4. `store-undecoded` / protected-memory failure
+
+Do not treat every `[store-undecoded]` label as a Unity-Mono RWX problem.
+
+- `insn=0xd4200000` belongs to the guest-breakpoint/INT3 family and is diagnosed separately.
+- A real protected-memory store plus evidence that HunieCam's Unity Mono is active can justify one controlled test of:
+
+```ini
+env.MADEIRA_WOW_RWX_PLAIN = 1
 ```
 
-9. Fix the **earliest high-signal failure**, not the loudest message near the bottom of the log.
-10. Repeat one controlled variable at a time.
+It is never part of the baseline and must be rolled back if it does not measurably help.
 
-## Triage order
+### 5. Graphics failure
 
-### A. JIT not ready
+Observe the actual API first.
 
-If the log says the debugger/JIT was not attached at the pool request, stop there. The game result is invalid because the runtime prerequisite failed.
-
-Use Madeira's current in-app JIT setup on iOS 27 where possible; current Madeira can pair in-app and uses LocalDevVPN for its loopback path. Do not diagnose HunieCam from a run where JIT was not active.
-
-### B. `store-undecoded`
-
-Treat `[store-undecoded]` as critical. Capture the complete first occurrence plus surrounding module/instruction lines. Recent upstream fixes closed several store forms that specifically hit Mono/.NET. If this appears on this current branch, it may identify a still-missing instruction encoding and is much more actionable than randomly toggling Wine settings.
-
-### C. WoW64 guest-window refusal
-
-If `[wow-window] ... refused: map too small` appears, record the address-map and memory information. HunieCam's i386 process needs Madeira's 32-bit guest window. Do not blindly increase JIT pool or swap values; those settings can make virtual-address pressure worse.
-
-### D. Missing DLL
-
-If `import_dll` reports a missing DLL, identify the exact module and why the game imports it. Use only a legitimate redistributable or user's own prerequisite. Madeira intentionally does not redistribute every Microsoft runtime.
-
-### E. Graphics failure
-
-Separate "game process is alive" from "image is correct."
-
-Baseline: default D3D9 route.
-
-If CPU/Mono startup is clearly successful but D3D9 fails, run one A/B test with the game's per-game config:
+- clean D3D11 → leave it alone;
+- D3D11 tied to a graphics-init/crash problem, or graphics init fails before any API is proven → one A/B test with `-force-d3d9`;
+- D3D9 is proven active and CPU/Mono startup succeeds, but a graphics-specific failure remains → a separate one-variable A/B with:
 
 ```ini
 d3d9 = native
 ```
 
-Remove it if it does not improve a measured problem. Never leave a switch merely because it sounds faster.
+Never combine the two experiments in one diagnostic run.
 
-An old error saying a Metal library uses language version 4.1 on an OS that does not support it is a runtime-build problem seen on older Madeira/DXMT builds. Rebase/update instead of creating a HunieCam workaround for it.
+### 6. Steam/Dock failure
 
-### F. Steam/Dock failure
+Keep Steam integration separate from game compatibility. If the legitimate direct route works but Dock/Steam does not, do not start changing Unity/FEX/graphics settings to fix a Steam-layer problem.
 
-A Steam refusal or Dock error does not prove the game binary itself is incompatible. Compare with the legitimate direct library route where ownership permits. Keep a separate result for Steam integration.
+### 7. Game/scene works but measurement is dirty
 
-## Performance targets
+Do **not** add another compatibility switch. Repeat the same profile and collect clean performance/device evidence.
 
-HunieCam is lightweight compared with the large 3D titles Madeira targets, so correctness is more important than chasing a high frame counter.
+### 8. Pointer works but dragging/release fails
 
-Target order:
+This is a real usability blocker for HunieCam. Record which of press, movement, release and game response failed. Do not call the port playable just because ordinary taps work.
 
-1. no stalls/freezes;
-2. correct input timing;
-3. correct UI rendering and text;
-4. stable audio;
-5. stable save behavior;
-6. smooth animation;
-7. only then optimize frame pacing or power use.
+## Why Wine Mono is not the HunieCam baseline
 
-Use a measured frame rate where available. The game previously received an official hotfix for runaway/high frame-rate behavior, so do not infer "more FPS is always better."
+Madeira has Wine Mono support for Windows .NET Framework programs. HunieCam's game runtime is different: the title carries its own Unity Mono runtime and managed assemblies. Therefore downloading/enabling Wine Mono is not a default HunieCam prerequisite.
 
-If a frame cap or vsync-like setting is needed for stable timing, record the before/after result instead of guessing.
+A missing Windows dependency still gets handled if the actual PE/runtime evidence names one; this rule only blocks assuming Wine Mono is required because the word "Mono" appears in both systems.
 
-## 21-pass research + implementation audit
+## Performance rule
 
-This project deliberately uses repeated passes with different questions instead of repeating the same search 21 times.
+HunieCam is light compared with modern 3D games, so correctness comes before chasing a large FPS number.
 
-| Pass | Question | Current result / implemented action |
-|---|---|---|
-| 1 | What exact Windows title/build are we targeting? | Steam app 426000; added a local file-identity probe so the owned copy, not web metadata, decides. |
-| 2 | Is the Windows executable 32- or 64-bit? | Public evidence says x86; probe now reads the PE machine field and refuses to pretend if it differs. |
-| 3 | What engine/runtime is involved? | Unity/Mono signals are expected; probe checks `Assembly-CSharp.dll`, `mono.dll` and Unity version strings. |
-| 4 | What graphics API is the useful baseline? | Direct3D 9; Madeira's D3D9/DXMT path is the baseline. |
-| 5 | Is the old fork runtime current enough? | No. Compatibility branch was created from current upstream instead of tuning October 2 code. |
-| 6 | Is current JIT setup different from the old project state? | Yes. Current Madeira has in-app JIT/pairing on iOS 27; runbook now uses current prerequisites. |
-| 7 | Is there a known Unity/Mono Madeira blocker? | Yes: protected/RWX store emulation family; triage now detects `[store-undecoded]`. |
-| 8 | Did upstream move on that blocker? | Yes: recent store-emulation fixes landed; reason to retest current code before patching title behavior. |
-| 9 | Is 32-bit support a first-class path? | Yes: WoW64 guest windows plus FEX i386 support; runbook treats guest-window refusal as a real root-cause class. |
-| 10 | Does 32-bit D3D9 have more than one route? | Yes: emulated frontend default and optional native D3D9; runbook makes this a controlled A/B, not a default tweak. |
-| 11 | Could virtual-address pressure be confused with RAM? | Yes. Triage distinguishes WoW64 map refusal and JIT address-space failure from ordinary out-of-memory. |
-| 12 | Could older DXMT builds create a fake title failure? | Yes. Added detection for the reported unsupported Metal-language-version failure family. |
-| 13 | Could a missing Windows prerequisite be hidden in a later crash? | Yes. Added `import_dll`/missing-DLL classification. |
-| 14 | What is the best first input mode? | Pointer/tap and real mouse/trackpad, not XInput. Existing hardware-input path is explicitly part of acceptance. |
-| 15 | What about Steamworks? | Probe inventories Steam DLLs; runbook separates direct game compatibility from Steam/Dock integration. |
-| 16 | How do we identify exactly what was tested without sharing the game? | SHA-256 identity hashes in the read-only preflight report. |
-| 17 | How do we prevent a one-off lucky launch from being called success? | Acceptance requires repeated cold launches, suspend/resume and a sustained session. |
-| 18 | How do we protect saves? | Disposable test save first; persistence after full relaunch is a separate gate. |
-| 19 | How do we stop speculative switch creep? | Default baseline, one-variable A/B, documented rollback for every non-default. |
-| 20 | How do we make failures actionable for Codex/maintainers? | Machine-readable preflight + log-triage JSON, original log preserved, exact build SHA and device state recorded. |
-| 21 | How do we keep this from regressing? | Synthetic unit tests and GitHub CI cover the title probe and newly important log signatures on Python 3.11/3.12/3.13. |
+The clean profile intends a 60 FPS Madeira cap because the title itself is publicly documented as uncapped. The performance analyzer must see evidence that the intended cap is actually working. Sustained 90/120/144 FPS is not a valid "60 FPS baseline."
 
-## Acceptance gates
+Performance comparisons are also blocked or qualified when device state makes them unfair, including serious thermal pressure or Low Power Mode.
 
-A gate passes only with evidence from the actual iPad run.
+## Save protocol
 
-1. **Build/runtime:** correct Madeira branch/build installed; JIT and Memory+ ready.
-2. **Owned game identity:** preflight records the actual executable architecture/hash and expected Unity/Mono layout, or accurately documents a different layout.
-3. **Launch:** `HunieCamStudio.exe` reaches a usable game screen through the chosen legitimate route.
-4. **Gameplay:** start/continue a real session and interact with the management loop, not only the title screen.
-5. **Image:** text, sprites, windows/panels and effects render without blocking corruption, persistent black areas or wrong scaling.
-6. **Pointer:** taps/clicks line up across the whole game surface; menus and small targets are reliable.
-7. **Keyboard/mouse:** when attached, real pointer and relevant keys work without stuck input or double delivery.
-8. **Sound:** music/effects play normally with no persistent crackle, silence or runaway latency.
-9. **Save:** a disposable test save survives a full game exit and Madeira relaunch.
-10. **Performance:** frame pacing is measured during a representative busy scene; no runaway-speed behavior.
-11. **Stability:** at least a 30-minute representative run without crash/freeze.
-12. **Cold launch:** three full launches in a row reach the usable game state.
-13. **Suspend/resume:** two background/foreground cycles return without broken image, audio, input or save state.
-14. **Rollback:** every non-default per-game switch used has a recorded reason and can be removed independently.
-15. **Repeatability:** final launch steps and per-game config reproduce the result from a clean Madeira start.
+Never use the only valued save as the first test. Use a disposable save.
 
-## Evidence bundle for every serious run
+Current machine procedure:
 
-Keep these together:
+1. Snapshot the expected `HunieCam Studio` LocalLow save folder **BEFORE** visible progress.
+2. Make visible in-game progress.
+3. Save/exit normally where the game allows.
+4. Snapshot **AFTER** progress.
+5. Fully close/reopen Madeira and the game.
+6. Snapshot **RELAUNCH**.
+7. Save Verify V2 must prove all three snapshots came from the same exact hashed source directory.
+8. The exact AFTER tree must survive RELAUNCH.
+9. Finally, confirm **inside the relaunched game** that the same visible progress returned.
 
-- Madeira commit SHA/release;
-- iPad model and iPadOS version;
-- JIT method and JIT/Memory+ ready state;
-- `huniecam-preflight.json`;
-- original `madeira-log.txt`;
-- `huniecam-triage.json`;
-- exact per-game config text;
-- launch route (direct library or Dock/Steam);
-- stage reached;
-- input/audio/save result;
-- measured frame rate/frame-time if available;
-- crash/exit code if any;
-- screenshots or screen recording where appropriate;
-- one sentence naming what changed from the previous run.
+Matching files alone never prove the game successfully interpreted the save.
 
-Do not put passwords, Steam tokens, pairing credentials, or proprietary game files into reports.
+## Physical Device Evidence V3
+
+Fill the run-linked form generated by Pipeline V8. Leave unknown observations as `null`.
+
+### Pointer grid
+
+All nine points must pass:
+
+- top-left, top-center, top-right;
+- middle-left, center, middle-right;
+- bottom-left, bottom-center, bottom-right.
+
+### HunieCam drag/release
+
+Run three real gameplay drags. Each trial separately records:
+
+- press;
+- movement;
+- release;
+- resulting game response.
+
+Three complete passes are mandatory.
+
+### Other manual observations
+
+Record:
+
+- JIT/Memory+ ready before launch;
+- real management gameplay works;
+- rendering is correct;
+- audio is stable;
+- visible save progress returns after relaunch;
+- busy play feels acceptably responsive once automated performance evidence is clean;
+- stable minutes;
+- three visible cold-launch results;
+- two suspend/resume results;
+- whether the documented final profile reproduced from a clean Madeira start.
+
+## Repeatability proof
+
+Three manual checkboxes are not enough. Repeatability V3 takes at least three **different sealed Run Context V2 files** and requires:
+
+- three unique run IDs;
+- same owned build;
+- same launch profile;
+- same bundled native-module set;
+- each reaches at least the required game/scene stage;
+- no triaged fatal failure in the counted runs;
+- the primary acceptance run is included.
+
+## Final acceptance bundle
+
+After the real device observations, Save Verify V2 and three sealed launches exist, run the final acceptance-bundle tool. It re-derives repeatability, evaluates Acceptance V9, revalidates the final provenance contract and writes a privacy-minimal final manifest.
+
+An `accepted=true` result is meaningful only when its source evidence is from the real iPad. Synthetic CI happy paths test the logic; they do not certify the game.
+
+## Hard acceptance gates
+
+Final Acceptance V9 requires all of these:
+
+1. owned game identity;
+2. valid current evidence contract;
+3. fully sealed Run Context V2;
+4. current Device Evidence V3;
+5. device observations tied to the same primary run;
+6. JIT + Memory+ ready;
+7. Windows executable launch;
+8. HunieCam managed game code reached;
+9. real gameplay;
+10. correct rendering;
+11. nine-point pointer grid;
+12. three successful real gameplay drag/release trials;
+13. correct audio;
+14. real save write detected;
+15. save tree survives relaunch;
+16. exact-folder Save Verify V2 passes;
+17. visibly restored save progress;
+18. clean automated performance evidence;
+19. acceptable observed busy-play behavior;
+20. at least 30 stable minutes;
+21. three visibly successful cold launches;
+22. three distinct sealed cold-launch contexts;
+23. two suspend/resume cycles;
+24. repeatable documented final profile.
+
+If any required result is false or unknown, the project is not accepted.
+
+## Current verification state
+
+Cycle 7 final helper/evidence validation passed at head `0f21c8483fa3b270bd98ab97812fef5c5cd92bbf` before the Cycle 7 documentation commits:
+
+- broad compatibility workflow `37900821124`: Python 3.11 / 3.12 / 3.13 all green;
+- evidence guardrails workflow `37900821167`: Python 3.11 / 3.12 / 3.13 all green.
+
+These workflows proved compilation, schema synchronization, provenance/dependency logic, device/final-acceptance logic, pipeline integration, HunieCam regressions and generic Madeira log triage.
+
+They **did not** prove physical-iPad gameplay.
 
 ## Completion rule
 
-The project is **not complete** because research looks favorable, because the app builds, because Wine starts, because Unity shows a splash, or because the main menu appears.
+Do not call this project complete because Madeira builds, Wine starts, Unity shows a splash, the title menu appears, ordinary taps work, CI is green, or a synthetic acceptance fixture passes.
 
-It is complete only when the acceptance gates above pass on the iPad with current evidence. Until then, report the deepest proven stage and the single earliest blocker.
+The project is complete only when **the actual iPad Pro M4** produces current evidence that passes every Acceptance V9 gate, including real HunieCam drag/release gameplay, save restoration and repeatability.
