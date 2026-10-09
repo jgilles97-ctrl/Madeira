@@ -4,8 +4,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 SRC="$HERE/vulkan_probe.c"
+COMPUTE_SRC="$HERE/vulkan_compute_writeback_probe.c"
 PATCHER="$HERE/patch-detroit-descriptor-features.py"
-PATCHED_SRC="${TMPDIR:-/tmp}/madeira-detroit-vulkan-probe-patched.c"
+TMP_ROOT="${TMPDIR:-/tmp}"
+PATCHED_SRC="$TMP_ROOT/madeira-detroit-vulkan-probe-patched.c"
+CAP_OBJ="$TMP_ROOT/madeira-detroit-vulkan-probe.o"
+COMPUTE_OBJ="$TMP_ROOT/madeira-detroit-vulkan-compute-writeback.o"
 OUT="${VULKAN_PROBE_OUT:-$HERE/vulkan_probe.exe}"
 VK_INCLUDE="${VULKAN_HEADERS:-$REPO_ROOT/toolchains/moltenvk-detroit-ios/include}"
 
@@ -43,31 +47,39 @@ if [ ! -f "$VK_INCLUDE/vulkan/vulkan.h" ]; then
     echo "run build/moltenvk-ios/build.sh first, or set VULKAN_HEADERS=/path/to/include" >&2
     exit 3
 fi
-
 if [ ! -f "$PATCHER" ]; then
     echo "error: Detroit descriptor feature patcher is missing: $PATCHER" >&2
     exit 4
 fi
+if [ ! -f "$COMPUTE_SRC" ]; then
+    echo "error: Detroit compute writeback canary source is missing: $COMPUTE_SRC" >&2
+    exit 5
+fi
 
 python3 "$PATCHER" "$SRC" "$PATCHED_SRC"
 
-echo "=== Madeira Windows x64 Vulkan probe ==="
+echo "=== Madeira Windows x64 Detroit capability probe ==="
 echo "compiler: $CC"
 echo "headers:  $VK_INCLUDE"
 echo "source:   $PATCHED_SRC"
+echo "compute:  $COMPUTE_SRC"
 echo "output:   $OUT"
 
-# Windows GetProcAddress returns FARPROC, while Vulkan exposes exact PFN_vk*
-# types. Casting that ABI-compatible Windows function pointer is required for a
-# dynamically loaded Vulkan canary, but MinGW GCC diagnoses the standard idiom
-# as -Wcast-function-type. Keep every other warning fatal and suppress only that
-# one portability diagnostic.
-"$CC" \
-    -std=c11 -O2 -g \
-    -Wall -Wextra -Werror -Wno-cast-function-type \
-    -I"$VK_INCLUDE" \
-    -o "$OUT" "$PATCHED_SRC" \
-    -lkernel32
+COMMON_FLAGS=(
+    -std=c11 -O2 -g
+    -Wall -Wextra -Werror -Wno-cast-function-type
+    -I"$VK_INCLUDE"
+)
+
+# Build the renderer-capability half and the compute data-integrity half as
+# separate objects, then link them into ONE trusted x64 canary. Renaming only the
+# compute source's main() keeps the physical iPad launch surface fixed: the
+# existing vulkan_probe.exe cannot report DETROIT_CAPABILITIES=PASS until the
+# linked compute write/readback function also succeeds.
+"$CC" "${COMMON_FLAGS[@]}" -c "$PATCHED_SRC" -o "$CAP_OBJ"
+"$CC" "${COMMON_FLAGS[@]}" -Dmain=madeira_compute_writeback_main \
+    -c "$COMPUTE_SRC" -o "$COMPUTE_OBJ"
+"$CC" -o "$OUT" "$CAP_OBJ" "$COMPUTE_OBJ" -lkernel32
 
 # Keep deployment explicit: building a probe must never silently overwrite a
 # game or app-bundle file. TEST_BUNDLE_DIR is opt-in.
@@ -81,5 +93,5 @@ if command -v file >/dev/null 2>&1; then
     file "$OUT"
 fi
 
-echo "PASS: Vulkan probe built"
-echo "Run it through Madeira/FEX/Wine. A successful headless bridge ends with RESULT=PASS."
+echo "PASS: Detroit Vulkan capability + compute-integrity probe built"
+echo "Physical success requires renderer features AND exact compute storage-buffer writeback."
