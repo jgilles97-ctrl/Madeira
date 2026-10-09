@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build a provenance-locked record for one HunieCam/Madeira device attempt.
 
-A run record joins the owned-build identity, exact launch profile, session depth,
-and optional performance summary. It lets later A/B comparisons refuse to
-compare different game binaries or silently different baseline settings.
+The record joins the owned-build identity, exact launch/interaction profile,
+session depth and optional performance summary. Cycle 8 adds the Madeira input
+mode to the profile fingerprint so direct-finger, touch-pointer and hardware
+pointer diagnostics can never masquerade as the same repeatable final profile.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import pathlib
 from typing import Any
 
 SCHEMA = "MADEIRA_HUNIECAM_RUN_RECORD_V1"
+INPUT_MODES = {"direct_finger", "touch_pointer", "hardware_mouse", "hardware_trackpad"}
 
 
 def load(path: pathlib.Path | None) -> dict[str, Any] | None:
@@ -40,6 +42,7 @@ def normalize_profile(profile: dict[str, Any] | None) -> dict[str, Any]:
         "display": source.get("display"),
         "fps": fps,
         "bits": source.get("bits"),
+        "input_mode": source.get("input_mode", source.get("inputMode")),
         "config": str(source.get("config", "")).strip(),
         "arguments": str(source.get("arguments", "")).strip(),
         "relative_executable": source.get("relative_executable", source.get("relativePath")),
@@ -73,6 +76,12 @@ def build(
     if missing_profile:
         errors.append("Launch profile is incomplete: " + ", ".join(missing_profile))
 
+    input_mode = normalized_profile.get("input_mode")
+    if input_mode is None:
+        warnings.append("Interaction/input mode is not sealed in this legacy run profile. It may be used for diagnosis, but Cycle 8 final repeatability must come from Pipeline V9+ with an explicit input mode.")
+    elif input_mode not in INPUT_MODES:
+        errors.append(f"Unsupported HunieCam input mode {input_mode!r}; expected one of {sorted(INPUT_MODES)}.")
+
     session_preflight = (session or {}).get("preflight") if isinstance((session or {}).get("preflight"), dict) else None
     if session_preflight:
         sess_identity = session_preflight.get("identity", {}) if isinstance(session_preflight.get("identity"), dict) else {}
@@ -100,10 +109,7 @@ def build(
         "schema": SCHEMA,
         "title": "HunieCam Studio",
         "steam_app_id": 426000,
-        "build": {
-            "fingerprint_sha256": build_fingerprint,
-            "material": build_material,
-        },
+        "build": {"fingerprint_sha256": build_fingerprint, "material": build_material},
         "profile": normalized_profile,
         "profile_sha256": profile_fingerprint,
         "comparison_key_sha256": comparison_key,
@@ -122,7 +128,7 @@ def build(
         "ready_for_comparison": not errors,
         "errors": errors,
         "warnings": warnings,
-        "rule": "Only compare runs when the owned-build fingerprint is identical. Profile changes must be deliberate and visible; different binaries are never an A/B test.",
+        "rule": "Only compare runs when the owned-build fingerprint is identical. The profile fingerprint includes Madeira input mode when supplied, so changing touch/pointer mode is a deliberate visible A/B variable rather than the same run profile.",
     }
 
 
