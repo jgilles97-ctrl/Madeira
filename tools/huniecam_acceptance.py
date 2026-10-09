@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Evidence-based acceptance gate evaluator for the HunieCam iPad/Madeira port.
+"""Evidence-based acceptance gates for the HunieCam iPad/Madeira port.
 
-The evaluator never invents a pass. Automated evidence can prove some gates;
-manual device observations are supplied explicitly as booleans in a small JSON
-file. Missing evidence remains UNKNOWN rather than being silently treated as a
-failure or success.
+Automated evidence proves machine-observable gates. Device observations are
+provided in JSON. Missing evidence remains UNKNOWN. Counted requirements
+(30-minute run, three cold launches, two suspend/resume cycles and pointer-grid
+coverage) are checked numerically so a vague checkbox cannot accidentally pass
+them. Legacy booleans remain accepted for older evidence files.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import json
 import pathlib
 from typing import Any
 
-SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V2"
+SCHEMA = "MADEIRA_HUNIECAM_ACCEPTANCE_V3"
 
 
 def load(path: pathlib.Path | None) -> dict[str, Any] | None:
@@ -22,11 +23,39 @@ def load(path: pathlib.Path | None) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def manual_value(manual: dict[str, Any] | None, key: str) -> bool | None:
+def manual_bool(manual: dict[str, Any] | None, key: str) -> bool | None:
     if not manual or key not in manual:
         return None
     value = manual[key]
     return value if isinstance(value, bool) else None
+
+
+def number(manual: dict[str, Any] | None, key: str) -> float | None:
+    if not manual or key not in manual:
+        return None
+    value = manual[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def threshold_or_legacy(manual: dict[str, Any] | None, numeric_key: str, minimum: float, legacy_key: str) -> bool | None:
+    value = number(manual, numeric_key)
+    if value is not None:
+        return value >= minimum
+    return manual_bool(manual, legacy_key)
+
+
+def pointer_gate(manual: dict[str, Any] | None) -> bool | None:
+    tested = number(manual, "pointer_points_tested")
+    passed = number(manual, "pointer_points_passed")
+    if tested is not None or passed is not None:
+        if tested is None or passed is None:
+            return None
+        # Nine points = four corners, four edge-midpoints and centre. Requiring
+        # every tested point to pass prevents one easy centre click from passing.
+        return tested >= 9 and passed == tested
+    return manual_bool(manual, "pointer_aligned")
 
 
 def gate(name: str, value: bool | None, evidence: str, required: bool = True) -> dict[str, Any]:
@@ -51,40 +80,27 @@ def evaluate(
         pe = preflight.get("identity", {}).get("pe", {})
         owned_identity = bool(preflight.get("exe_found")) and bool(pe.get("valid_pe")) and bool(preflight.get("identity", {}).get("exe_sha256"))
     gates.append(gate("owned_game_identity", owned_identity,
-                      "Preflight must identify a real PE executable and record its SHA-256."))
+                      "Preflight identified a real PE executable and recorded its SHA-256."))
 
-    runtime_ready = manual_value(manual, "jit_memory_ready")
-    gates.append(gate("jit_and_memory_ready", runtime_ready,
-                      "Manual device observation: Madeira showed JIT and Memory+ ready before launch."))
+    gates.append(gate("jit_and_memory_ready", manual_bool(manual, "jit_memory_ready"),
+                      "Device observation: Madeira showed JIT and Memory+ ready before launch."))
 
     stage = int(session.get("deepest_stage", 0)) if session else 0
-    launch_ok = stage >= 20 if session else None
-    gates.append(gate("windows_launch", launch_ok,
-                      "Session triage reached the Windows executable stage (>=20)."))
+    gates.append(gate("windows_launch", stage >= 20 if session else None,
+                      "Session triage reached Windows executable stage >=20."))
+    gates.append(gate("game_managed_code", stage >= 65 if session else None,
+                      "Session triage reached game managed-code stage >=65."))
 
-    managed_ok = stage >= 65 if session else None
-    gates.append(gate("game_managed_code", managed_ok,
-                      "Session triage saw Assembly-CSharp.dll / equivalent game managed-code stage (>=65)."))
+    gates.append(gate("real_gameplay", manual_bool(manual, "real_gameplay"),
+                      "Device observation: a real management/gameplay session was interactive, not only splash/menu."))
+    gates.append(gate("rendering_correct", manual_bool(manual, "rendering_correct"),
+                      "Device observation: text, sprites, panels and effects rendered without blocking corruption."))
+    gates.append(gate("pointer_grid", pointer_gate(manual),
+                      "Counted device sweep: >=9 screen points tested and every tested point passed; legacy pointer_aligned boolean remains supported."))
+    gates.append(gate("audio_correct", manual_bool(manual, "audio_correct"),
+                      "Device observation: music/effects were present and stable without persistent crackle/latency."))
 
-    gameplay = manual_value(manual, "real_gameplay")
-    gates.append(gate("real_gameplay", gameplay,
-                      "Manual observation: a real management/gameplay session was interactive, not only a splash/menu."))
-
-    rendering = manual_value(manual, "rendering_correct")
-    gates.append(gate("rendering_correct", rendering,
-                      "Manual observation: text, sprites, panels and effects rendered without blocking corruption."))
-
-    pointer = manual_value(manual, "pointer_aligned")
-    gates.append(gate("pointer_aligned", pointer,
-                      "Manual observation: taps/clicks landed correctly across corners, menus and small targets."))
-
-    audio = manual_value(manual, "audio_correct")
-    gates.append(gate("audio_correct", audio,
-                      "Manual observation: music/effects were present and stable without persistent crackle/latency."))
-
-    write_detected = None
-    persistence = None
-    save_machine_gate = None
+    write_detected = persistence = save_machine_gate = None
     if save_verification:
         if "progress_write_detected" in save_verification:
             write_detected = bool(save_verification.get("progress_write_detected"))
@@ -92,48 +108,30 @@ def evaluate(
             persistence = bool(save_verification.get("save_tree_survived_relaunch"))
         if "machine_gate_pass" in save_verification:
             save_machine_gate = bool(save_verification.get("machine_gate_pass"))
-
     gates.append(gate("save_write_detected", write_detected,
-                      "Three-stage save verification must detect a real before→after tree change after visible progress."))
+                      "Three-stage save verification detected a real before→after tree change."))
     gates.append(gate("save_survives_relaunch", persistence,
-                      "The exact post-progress save tree must still be present after a full Madeira/game relaunch."))
+                      "Exact post-progress save tree still existed after full Madeira/game relaunch."))
     gates.append(gate("save_machine_verification", save_machine_gate,
-                      "Save verification passes only when progress was written AND the post-progress tree survived relaunch."))
+                      "Machine save gate requires both a progress write and relaunch persistence."))
+    gates.append(gate("save_progress_visible_after_relaunch", manual_bool(manual, "save_progress_visible_after_relaunch"),
+                      "Device observation: relaunched game visibly restored the same progress."))
 
-    save_visible = manual_value(manual, "save_progress_visible_after_relaunch")
-    gates.append(gate("save_progress_visible_after_relaunch", save_visible,
-                      "Manual observation: the relaunched game visibly restored the same progress. Matching files alone are not enough."))
-
-    performance = manual_value(manual, "performance_acceptable")
-    gates.append(gate("performance_acceptable", performance,
-                      "Manual observation/measurement: representative busy play had acceptable frame pacing and no runaway game speed."))
-
-    stability = manual_value(manual, "stable_30_minutes")
-    gates.append(gate("stable_30_minutes", stability,
-                      "Manual observation: representative play lasted at least 30 minutes without crash/freeze."))
-
-    cold = manual_value(manual, "three_cold_launches")
-    gates.append(gate("three_cold_launches", cold,
-                      "Manual observation: three full cold launches reached the usable game state."))
-
-    suspend = manual_value(manual, "two_suspend_resume_cycles")
-    gates.append(gate("two_suspend_resume_cycles", suspend,
-                      "Manual observation: two background/foreground cycles returned with image/audio/input/save state intact."))
-
-    repeatable = manual_value(manual, "repeatable_profile")
-    gates.append(gate("repeatable_profile", repeatable,
-                      "Manual observation: the documented final launch profile reproduces the same result from a clean Madeira start."))
+    gates.append(gate("performance_acceptable", manual_bool(manual, "performance_acceptable"),
+                      "Measured/observed busy play had acceptable frame pacing and no runaway game speed."))
+    gates.append(gate("stable_30_minutes", threshold_or_legacy(manual, "stable_minutes", 30, "stable_30_minutes"),
+                      "Counted representative stable play must be >=30 minutes; legacy boolean remains supported."))
+    gates.append(gate("three_cold_launches", threshold_or_legacy(manual, "cold_launches", 3, "three_cold_launches"),
+                      "Counted successful cold launches must be >=3; legacy boolean remains supported."))
+    gates.append(gate("two_suspend_resume_cycles", threshold_or_legacy(manual, "suspend_resume_cycles", 2, "two_suspend_resume_cycles"),
+                      "Counted successful background/foreground cycles must be >=2; legacy boolean remains supported."))
+    gates.append(gate("repeatable_profile", manual_bool(manual, "repeatable_profile"),
+                      "Device observation: documented final profile reproduced the same result from a clean Madeira start."))
 
     required = [g for g in gates if g["required"]]
     counts = {s: sum(1 for g in required if g["status"] == s) for s in ("PASS", "FAIL", "UNKNOWN")}
     complete = counts["FAIL"] == 0 and counts["UNKNOWN"] == 0
-    if counts["FAIL"]:
-        overall = "NOT_READY_FAILED_GATE"
-    elif counts["UNKNOWN"]:
-        overall = "NOT_READY_MISSING_EVIDENCE"
-    else:
-        overall = "ACCEPTED"
-
+    overall = "NOT_READY_FAILED_GATE" if counts["FAIL"] else "NOT_READY_MISSING_EVIDENCE" if counts["UNKNOWN"] else "ACCEPTED"
     next_gate = next((g for g in required if g["status"] != "PASS"), None)
     return {
         "schema": SCHEMA,
@@ -142,7 +140,8 @@ def evaluate(
         "counts": counts,
         "next_unproven_gate": next_gate,
         "gates": gates,
-        "rule": "Unknown is never treated as pass. The port is accepted only when every required gate is PASS.",
+        "thresholds": {"pointer_points": 9, "stable_minutes": 30, "cold_launches": 3, "suspend_resume_cycles": 2},
+        "rule": "Unknown is never pass. Counted gates must meet their threshold. The port is accepted only when every required gate is PASS.",
     }
 
 
@@ -152,10 +151,9 @@ def main() -> int:
     parser.add_argument("--session", type=pathlib.Path)
     parser.add_argument("--save-verification", type=pathlib.Path,
                         help="JSON from huniecam_save_probe.py verify BEFORE AFTER RELAUNCH")
-    parser.add_argument("--manual", type=pathlib.Path, help="JSON booleans for device-observation gates")
+    parser.add_argument("--manual", type=pathlib.Path, help="JSON with explicit device observations/counts")
     parser.add_argument("--json", dest="json_path", type=pathlib.Path)
     args = parser.parse_args()
-
     report = evaluate(load(args.preflight), load(args.session), load(args.save_verification), load(args.manual))
     rendered = json.dumps(report, indent=2, sort_keys=True)
     if args.json_path:
