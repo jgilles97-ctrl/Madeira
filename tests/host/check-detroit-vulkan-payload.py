@@ -54,6 +54,10 @@ def test_expected_machine_constants() -> None:
     require(len(mod.ARM64EC_MODULES) == 2, "expected two ARM64EC Vulkan modules")
     require(len(mod.X64_DEVICE_CANARIES) == 4, "expected four x64 gate executables")
     require("vulkan-device-gate-x64.exe" in mod.X64_DEVICE_CANARIES, "device gate missing from x64 payload contract")
+    require(
+        mod.EXPECTED_IPAD_CACHE_PATCH == "MADEIRA_IPAD_DISK_CACHE_SPLIT_V1",
+        "audited iPad cache patch identity changed unexpectedly",
+    )
 
 
 def test_build_info_parser_and_pinned_identity() -> None:
@@ -66,6 +70,8 @@ def test_build_info_parser_and_pinned_identity() -> None:
                     f"release={mod.EXPECTED_MOLTENVK_RELEASE}",
                     f"ref={mod.EXPECTED_MOLTENVK_COMMIT}",
                     f"commit={mod.EXPECTED_MOLTENVK_COMMIT}",
+                    "madeira_ipad_cache_split=1",
+                    f"madeira_ipad_cache_patch={mod.EXPECTED_IPAD_CACHE_PATCH}",
                     "sdk=/example/iPhoneOS.sdk",
                 ]
             )
@@ -77,6 +83,11 @@ def test_build_info_parser_and_pinned_identity() -> None:
         require(info["release"] == "Release003", "release parse failed")
         require(info["ref"] == mod.EXPECTED_MOLTENVK_COMMIT, "ref parse failed")
         require(info["commit"] == mod.EXPECTED_MOLTENVK_COMMIT, "commit parse failed")
+        require(info["madeira_ipad_cache_split"] == "1", "iPad cache split parse failed")
+        require(
+            info["madeira_ipad_cache_patch"] == mod.EXPECTED_IPAD_CACHE_PATCH,
+            "iPad cache patch identity parse failed",
+        )
         require(
             mod.EXPECTED_MOLTENVK_COMMIT == "8b511fdc5351a37c305bc246e161796ddca56b18",
             "audited Release003 commit changed unexpectedly",
