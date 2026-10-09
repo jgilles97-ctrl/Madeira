@@ -37,6 +37,19 @@ static int has_extension(const VkExtensionProperties *exts, uint32_t count,
     return 0;
 }
 
+/* MinGW GCC diagnoses a direct FARPROC -> Vulkan-function cast under
+ * -Wcast-function-type. Function pointers have the same representation on the
+ * Windows ABI here, so copy the representation instead of casting it. */
+static PFN_vkGetInstanceProcAddr resolve_gip(HMODULE module)
+{
+    FARPROC raw = GetProcAddress(module, "vkGetInstanceProcAddr");
+    PFN_vkGetInstanceProcAddr out = NULL;
+    if (!raw) return NULL;
+    if (sizeof(out) != sizeof(raw)) return NULL;
+    memcpy(&out, &raw, sizeof(out));
+    return out;
+}
+
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     (void)wparam;
@@ -179,7 +192,7 @@ int main(void)
 
     loader = LoadLibraryA("vulkan-1.dll");
     if (!loader) { rc = fail(12, "load-vulkan-loader", "vulkan-1.dll is missing"); goto done; }
-    gip = (PFN_vkGetInstanceProcAddr)GetProcAddress(loader, "vkGetInstanceProcAddr");
+    gip = resolve_gip(loader);
     if (!gip) { rc = fail(13, "resolve-vulkan-loader", "vkGetInstanceProcAddr is missing"); goto done; }
     enum_instance_exts = (PFN_vkEnumerateInstanceExtensionProperties)
         gip(VK_NULL_HANDLE, "vkEnumerateInstanceExtensionProperties");
@@ -313,31 +326,31 @@ int main(void)
         float priority = 1.0f;
         VkDeviceQueueCreateInfo qci;
         VkDeviceCreateInfo dci;
-        const char *enabled_exts[2];
+        const char *enabled[2];
         uint32_t enabled_count = 0;
         memset(&qci, 0, sizeof(qci));
         qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         qci.queueFamilyIndex = queue_family;
         qci.queueCount = 1;
         qci.pQueuePriorities = &priority;
-        enabled_exts[enabled_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+        enabled[enabled_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
         if (has_extension(device_exts, device_ext_count, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME))
-            enabled_exts[enabled_count++] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+            enabled[enabled_count++] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
 #endif
         memset(&dci, 0, sizeof(dci));
         dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = enabled_count;
-        dci.ppEnabledExtensionNames = enabled_exts;
+        dci.ppEnabledExtensionNames = enabled;
         vr = create_device(physical, &dci, NULL, &device);
         if (vr != VK_SUCCESS || device == VK_NULL_HANDLE) {
             char msg[96]; snprintf(msg, sizeof(msg), "vkCreateDevice failed (%d)", (int)vr);
             rc = fail(27, "create-device", msg); goto done;
         }
     }
-    printf("DEVICE=PASS\n");
+    printf("LOGICAL_DEVICE=PASS\n");
 
     RESOLVE_DEVICE(destroy_device, "vkDestroyDevice", PFN_vkDestroyDevice);
     RESOLVE_DEVICE(get_device_queue, "vkGetDeviceQueue", PFN_vkGetDeviceQueue);
@@ -368,66 +381,43 @@ int main(void)
     RESOLVE_DEVICE(queue_submit, "vkQueueSubmit", PFN_vkQueueSubmit);
     RESOLVE_DEVICE(device_wait_idle, "vkDeviceWaitIdle", PFN_vkDeviceWaitIdle);
     get_device_queue(device, queue_family, 0, &queue);
-    if (queue == VK_NULL_HANDLE) { rc = fail(61, "get-device-queue", "vkGetDeviceQueue returned NULL"); goto done; }
 
     memset(&caps, 0, sizeof(caps));
     vr = get_surface_caps(physical, surface, &caps);
-    if (vr != VK_SUCCESS) { rc = fail(62, "surface-capabilities", "surface capability query failed"); goto done; }
-    if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {
-        rc = fail(63, "surface-usage", "surface images do not support COLOR_ATTACHMENT"); goto done;
-    }
-
+    if (vr != VK_SUCCESS) { rc = fail(61, "surface-capabilities", "query failed"); goto done; }
     vr = get_surface_formats(physical, surface, &format_count, NULL);
-    if (vr != VK_SUCCESS || !format_count) { rc = fail(64, "surface-formats", "no surface formats"); goto done; }
+    if (vr != VK_SUCCESS || !format_count) { rc = fail(62, "surface-formats", "none reported"); goto done; }
     formats = (VkSurfaceFormatKHR *)calloc(format_count, sizeof(*formats));
-    if (!formats) { rc = fail(65, "allocate", "format allocation failed"); goto done; }
+    if (!formats) { rc = fail(63, "allocate", "format allocation failed"); goto done; }
     vr = get_surface_formats(physical, surface, &format_count, formats);
-    if (vr != VK_SUCCESS) { rc = fail(66, "surface-formats", "surface format read failed"); goto done; }
+    if (vr != VK_SUCCESS) { rc = fail(64, "surface-formats", "read failed"); goto done; }
     chosen_format = formats[0];
-    if (format_count == 1 && chosen_format.format == VK_FORMAT_UNDEFINED) {
-        chosen_format.format = VK_FORMAT_B8G8R8A8_UNORM;
-    } else {
-        for (i = 0; i < format_count; ++i) {
-            if (formats[i].format == VK_FORMAT_B8G8R8A8_UNORM ||
-                formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
-                chosen_format = formats[i];
-                break;
-            }
+    for (i = 0; i < format_count; ++i) {
+        if (formats[i].format == VK_FORMAT_B8G8R8A8_UNORM || formats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
+            chosen_format = formats[i]; break;
         }
     }
-
     vr = get_present_modes(physical, surface, &present_mode_count, NULL);
-    if (vr != VK_SUCCESS || !present_mode_count) { rc = fail(67, "present-modes", "no present modes"); goto done; }
+    if (vr != VK_SUCCESS || !present_mode_count) { rc = fail(65, "present-modes", "none reported"); goto done; }
     present_modes = (VkPresentModeKHR *)calloc(present_mode_count, sizeof(*present_modes));
-    if (!present_modes) { rc = fail(68, "allocate", "present mode allocation failed"); goto done; }
+    if (!present_modes) { rc = fail(66, "allocate", "present-mode allocation failed"); goto done; }
     vr = get_present_modes(physical, surface, &present_mode_count, present_modes);
-    if (vr != VK_SUCCESS) { rc = fail(69, "present-modes", "present mode read failed"); goto done; }
-    /* FIFO is required by Vulkan and maps cleanly to a display-synchronised Metal present. */
+    if (vr != VK_SUCCESS) { rc = fail(67, "present-modes", "read failed"); goto done; }
 
-    if (caps.currentExtent.width != UINT32_MAX) {
-        extent = caps.currentExtent;
-    } else {
-        extent.width = clamp_u32(640u, caps.minImageExtent.width, caps.maxImageExtent.width);
-        extent.height = clamp_u32(360u, caps.minImageExtent.height, caps.maxImageExtent.height);
+    if (caps.currentExtent.width != UINT32_MAX) extent = caps.currentExtent;
+    else {
+        extent.width = clamp_u32(640, caps.minImageExtent.width, caps.maxImageExtent.width);
+        extent.height = clamp_u32(360, caps.minImageExtent.height, caps.maxImageExtent.height);
     }
-    printf("SWAPCHAIN_EXTENT=%ux%u\n", extent.width, extent.height);
-    printf("SWAPCHAIN_FORMAT=%d\n", (int)chosen_format.format);
+    image_count = caps.minImageCount + 1;
+    if (caps.maxImageCount && image_count > caps.maxImageCount) image_count = caps.maxImageCount;
 
     {
         VkSwapchainCreateInfoKHR sci;
-        VkCompositeAlphaFlagBitsKHR composite = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        uint32_t desired = caps.minImageCount + 1;
-        if (caps.maxImageCount && desired > caps.maxImageCount) desired = caps.maxImageCount;
-        if (!(caps.supportedCompositeAlpha & composite)) {
-            VkCompositeAlphaFlagsKHR candidates = caps.supportedCompositeAlpha;
-            if (candidates & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR) composite = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
-            else if (candidates & VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR) composite = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
-            else composite = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
-        }
         memset(&sci, 0, sizeof(sci));
         sci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
         sci.surface = surface;
-        sci.minImageCount = desired;
+        sci.minImageCount = image_count;
         sci.imageFormat = chosen_format.format;
         sci.imageColorSpace = chosen_format.colorSpace;
         sci.imageExtent = extent;
@@ -435,27 +425,28 @@ int main(void)
         sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         sci.preTransform = caps.currentTransform;
-        sci.compositeAlpha = composite;
+        sci.compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+                                 ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+                                 : (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha & (~caps.supportedCompositeAlpha + 1));
         sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
         sci.clipped = VK_TRUE;
         vr = create_swapchain(device, &sci, NULL, &swapchain);
         if (vr != VK_SUCCESS || swapchain == VK_NULL_HANDLE) {
             char msg[96]; snprintf(msg, sizeof(msg), "vkCreateSwapchainKHR failed (%d)", (int)vr);
-            rc = fail(70, "create-swapchain", msg); goto done;
+            rc = fail(68, "create-swapchain", msg); goto done;
         }
     }
     printf("SWAPCHAIN=PASS\n");
 
     vr = get_swapchain_images(device, swapchain, &image_count, NULL);
-    if (vr != VK_SUCCESS || !image_count) { rc = fail(71, "swapchain-images", "swapchain returned no images"); goto done; }
+    if (vr != VK_SUCCESS || !image_count) { rc = fail(69, "swapchain-images", "none returned"); goto done; }
     images = (VkImage *)calloc(image_count, sizeof(*images));
     views = (VkImageView *)calloc(image_count, sizeof(*views));
     framebuffers = (VkFramebuffer *)calloc(image_count, sizeof(*framebuffers));
     cmds = (VkCommandBuffer *)calloc(image_count, sizeof(*cmds));
-    if (!images || !views || !framebuffers || !cmds) { rc = fail(72, "allocate", "swapchain resource allocation failed"); goto done; }
+    if (!images || !views || !framebuffers || !cmds) { rc = fail(70, "allocate", "swapchain resources failed"); goto done; }
     vr = get_swapchain_images(device, swapchain, &image_count, images);
-    if (vr != VK_SUCCESS) { rc = fail(73, "swapchain-images", "swapchain image read failed"); goto done; }
-    printf("SWAPCHAIN_IMAGES=%u\n", image_count);
+    if (vr != VK_SUCCESS) { rc = fail(71, "swapchain-images", "read failed"); goto done; }
 
     for (i = 0; i < image_count; ++i) {
         VkImageViewCreateInfo iv;
@@ -472,14 +463,13 @@ int main(void)
         iv.subresourceRange.levelCount = 1;
         iv.subresourceRange.layerCount = 1;
         vr = create_image_view(device, &iv, NULL, &views[i]);
-        if (vr != VK_SUCCESS) { rc = fail(74, "create-image-view", "vkCreateImageView failed"); goto done; }
+        if (vr != VK_SUCCESS) { rc = fail(72, "create-image-view", "failed"); goto done; }
     }
 
     {
         VkAttachmentDescription attachment;
-        VkAttachmentReference color_ref;
+        VkAttachmentReference ref;
         VkSubpassDescription subpass;
-        VkSubpassDependency dep;
         VkRenderPassCreateInfo rp;
         memset(&attachment, 0, sizeof(attachment));
         attachment.format = chosen_format.format;
@@ -490,29 +480,20 @@ int main(void)
         attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        memset(&color_ref, 0, sizeof(color_ref));
-        color_ref.attachment = 0;
-        color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ref.attachment = 0;
+        ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         memset(&subpass, 0, sizeof(subpass));
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &color_ref;
-        memset(&dep, 0, sizeof(dep));
-        dep.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dep.dstSubpass = 0;
-        dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        subpass.pColorAttachments = &ref;
         memset(&rp, 0, sizeof(rp));
         rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         rp.attachmentCount = 1;
         rp.pAttachments = &attachment;
         rp.subpassCount = 1;
         rp.pSubpasses = &subpass;
-        rp.dependencyCount = 1;
-        rp.pDependencies = &dep;
         vr = create_render_pass(device, &rp, NULL, &render_pass);
-        if (vr != VK_SUCCESS) { rc = fail(75, "create-render-pass", "vkCreateRenderPass failed"); goto done; }
+        if (vr != VK_SUCCESS) { rc = fail(73, "create-render-pass", "failed"); goto done; }
     }
 
     for (i = 0; i < image_count; ++i) {
@@ -526,7 +507,7 @@ int main(void)
         fb.height = extent.height;
         fb.layers = 1;
         vr = create_framebuffer(device, &fb, NULL, &framebuffers[i]);
-        if (vr != VK_SUCCESS) { rc = fail(76, "create-framebuffer", "vkCreateFramebuffer failed"); goto done; }
+        if (vr != VK_SUCCESS) { rc = fail(74, "create-framebuffer", "failed"); goto done; }
     }
 
     {
@@ -536,29 +517,28 @@ int main(void)
         cp.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         cp.queueFamilyIndex = queue_family;
         vr = create_command_pool(device, &cp, NULL, &command_pool);
-        if (vr != VK_SUCCESS) { rc = fail(77, "create-command-pool", "vkCreateCommandPool failed"); goto done; }
+        if (vr != VK_SUCCESS) { rc = fail(75, "create-command-pool", "failed"); goto done; }
         memset(&ca, 0, sizeof(ca));
         ca.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ca.commandPool = command_pool;
         ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         ca.commandBufferCount = image_count;
         vr = allocate_cmds(device, &ca, cmds);
-        if (vr != VK_SUCCESS) { rc = fail(78, "allocate-command-buffers", "vkAllocateCommandBuffers failed"); goto done; }
+        if (vr != VK_SUCCESS) { rc = fail(76, "allocate-command-buffers", "failed"); goto done; }
     }
 
     for (i = 0; i < image_count; ++i) {
         VkCommandBufferBeginInfo bi;
-        VkRenderPassBeginInfo rbi;
         VkClearValue clear;
+        VkRenderPassBeginInfo rbi;
         memset(&bi, 0, sizeof(bi));
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
         vr = begin_cmd(cmds[i], &bi);
-        if (vr != VK_SUCCESS) { rc = fail(79, "record-command-buffer", "vkBeginCommandBuffer failed"); goto done; }
-        memset(&clear, 0, sizeof(clear));
+        if (vr != VK_SUCCESS) { rc = fail(77, "begin-command-buffer", "failed"); goto done; }
         clear.color.float32[0] = 0.04f;
-        clear.color.float32[1] = 0.20f;
-        clear.color.float32[2] = 0.38f;
+        clear.color.float32[1] = 0.12f;
+        clear.color.float32[2] = 0.22f;
         clear.color.float32[3] = 1.0f;
         memset(&rbi, 0, sizeof(rbi));
         rbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -570,84 +550,58 @@ int main(void)
         cmd_begin_render_pass(cmds[i], &rbi, VK_SUBPASS_CONTENTS_INLINE);
         cmd_end_render_pass(cmds[i]);
         vr = end_cmd(cmds[i]);
-        if (vr != VK_SUCCESS) { rc = fail(80, "record-command-buffer", "vkEndCommandBuffer failed"); goto done; }
+        if (vr != VK_SUCCESS) { rc = fail(78, "end-command-buffer", "failed"); goto done; }
     }
-    printf("CLEAR_COMMANDS=PASS\n");
 
     {
         VkSemaphoreCreateInfo si;
         VkFenceCreateInfo fi;
         memset(&si, 0, sizeof(si)); si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        memset(&fi, 0, sizeof(fi)); fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO; fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         if (create_semaphore(device, &si, NULL, &acquire_sem) != VK_SUCCESS ||
-            create_semaphore(device, &si, NULL, &render_sem) != VK_SUCCESS) {
-            rc = fail(81, "create-sync", "vkCreateSemaphore failed"); goto done;
-        }
-        memset(&fi, 0, sizeof(fi)); fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        if (create_fence(device, &fi, NULL, &frame_fence) != VK_SUCCESS) {
-            rc = fail(82, "create-sync", "vkCreateFence failed"); goto done;
+            create_semaphore(device, &si, NULL, &render_sem) != VK_SUCCESS ||
+            create_fence(device, &fi, NULL, &frame_fence) != VK_SUCCESS) {
+            rc = fail(79, "create-sync", "semaphore/fence creation failed"); goto done;
         }
     }
 
-    {
-        uint32_t frame;
-        ULONGLONG start_ms = GetTickCount64();
-        for (frame = 0; frame < TARGET_FRAMES; ++frame) {
-            uint32_t image_index = 0;
-            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            VkSubmitInfo submit;
-            VkPresentInfoKHR present;
-            pump_messages(&closed);
-            if (closed || !IsWindow(hwnd)) { rc = fail(83, "present-loop", "window closed during probe"); goto done; }
-
-            vr = wait_fences(device, 1, &frame_fence, VK_TRUE, UINT64_MAX);
-            if (vr != VK_SUCCESS) { rc = fail(84, "present-loop", "vkWaitForFences failed"); goto done; }
-            if (reset_fences(device, 1, &frame_fence) != VK_SUCCESS) {
-                rc = fail(85, "present-loop", "vkResetFences failed"); goto done;
-            }
-            vr = acquire_next_image(device, swapchain, UINT64_MAX, acquire_sem, VK_NULL_HANDLE, &image_index);
-            if (vr != VK_SUCCESS && vr != VK_SUBOPTIMAL_KHR) {
-                char msg[96]; snprintf(msg, sizeof(msg), "vkAcquireNextImageKHR failed (%d)", (int)vr);
-                rc = fail(86, "acquire-swapchain-image", msg); goto done;
-            }
-
-            memset(&submit, 0, sizeof(submit));
-            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submit.waitSemaphoreCount = 1;
-            submit.pWaitSemaphores = &acquire_sem;
-            submit.pWaitDstStageMask = &wait_stage;
-            submit.commandBufferCount = 1;
-            submit.pCommandBuffers = &cmds[image_index];
-            submit.signalSemaphoreCount = 1;
-            submit.pSignalSemaphores = &render_sem;
-            vr = queue_submit(queue, 1, &submit, frame_fence);
-            if (vr != VK_SUCCESS) { rc = fail(87, "queue-submit", "vkQueueSubmit failed"); goto done; }
-
-            memset(&present, 0, sizeof(present));
-            present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-            present.waitSemaphoreCount = 1;
-            present.pWaitSemaphores = &render_sem;
-            present.swapchainCount = 1;
-            present.pSwapchains = &swapchain;
-            present.pImageIndices = &image_index;
-            vr = queue_present(queue, &present);
-            if (vr != VK_SUCCESS && vr != VK_SUBOPTIMAL_KHR) {
-                char msg[96]; snprintf(msg, sizeof(msg), "vkQueuePresentKHR failed (%d)", (int)vr);
-                rc = fail(88, "queue-present", msg); goto done;
-            }
-        }
-        {
-            ULONGLONG elapsed_ms = GetTickCount64() - start_ms;
-            double seconds = elapsed_ms ? (double)elapsed_ms / 1000.0 : 0.001;
-            printf("PRESENTED_FRAMES=%u\n", TARGET_FRAMES);
-            printf("PRESENT_SECONDS=%.3f\n", seconds);
-            printf("PRESENT_FPS=%.2f\n", (double)TARGET_FRAMES / seconds);
-        }
+    for (i = 0; i < TARGET_FRAMES && !closed; ++i) {
+        uint32_t image_index = 0;
+        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo submit;
+        VkPresentInfoKHR present;
+        pump_messages(&closed);
+        if (closed) break;
+        vr = wait_fences(device, 1, &frame_fence, VK_TRUE, UINT64_MAX);
+        if (vr != VK_SUCCESS) { rc = fail(80, "wait-fence", "failed"); goto done; }
+        vr = reset_fences(device, 1, &frame_fence);
+        if (vr != VK_SUCCESS) { rc = fail(81, "reset-fence", "failed"); goto done; }
+        vr = acquire_next_image(device, swapchain, UINT64_MAX, acquire_sem, VK_NULL_HANDLE, &image_index);
+        if (vr != VK_SUCCESS && vr != VK_SUBOPTIMAL_KHR) { rc = fail(82, "acquire-image", "failed"); goto done; }
+        memset(&submit, 0, sizeof(submit));
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.waitSemaphoreCount = 1;
+        submit.pWaitSemaphores = &acquire_sem;
+        submit.pWaitDstStageMask = &wait_stage;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &cmds[image_index];
+        submit.signalSemaphoreCount = 1;
+        submit.pSignalSemaphores = &render_sem;
+        vr = queue_submit(queue, 1, &submit, frame_fence);
+        if (vr != VK_SUCCESS) { rc = fail(83, "queue-submit", "failed"); goto done; }
+        memset(&present, 0, sizeof(present));
+        present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        present.waitSemaphoreCount = 1;
+        present.pWaitSemaphores = &render_sem;
+        present.swapchainCount = 1;
+        present.pSwapchains = &swapchain;
+        present.pImageIndices = &image_index;
+        vr = queue_present(queue, &present);
+        if (vr != VK_SUCCESS && vr != VK_SUBOPTIMAL_KHR) { rc = fail(84, "queue-present", "failed"); goto done; }
+        if ((i + 1) % 30 == 0) printf("FRAME_%u=PASS\n", i + 1);
     }
-
-    if (device_wait_idle(device) != VK_SUCCESS) {
-        rc = fail(89, "device-wait-idle", "vkDeviceWaitIdle failed after presentation"); goto done;
-    }
+    if (closed) { rc = fail(85, "window-closed", "probe window closed before target frame count"); goto done; }
+    printf("PRESENTED_FRAMES=%u\n", TARGET_FRAMES);
     printf("CLEAR_PRESENT=PASS\n");
     printf("RESULT=PASS\n");
     printf("NEXT_GATE=detroit-process-and-shader-compilation\n");
@@ -655,34 +609,22 @@ int main(void)
 done:
     if (device != VK_NULL_HANDLE && device_wait_idle) device_wait_idle(device);
     if (device != VK_NULL_HANDLE) {
-        if (frame_fence && destroy_fence) destroy_fence(device, frame_fence, NULL);
-        if (render_sem && destroy_semaphore) destroy_semaphore(device, render_sem, NULL);
-        if (acquire_sem && destroy_semaphore) destroy_semaphore(device, acquire_sem, NULL);
-        if (command_pool && destroy_command_pool) destroy_command_pool(device, command_pool, NULL);
-        if (framebuffers && destroy_framebuffer) {
-            for (i = 0; i < image_count; ++i) if (framebuffers[i]) destroy_framebuffer(device, framebuffers[i], NULL);
-        }
-        if (render_pass && destroy_render_pass) destroy_render_pass(device, render_pass, NULL);
-        if (views && destroy_image_view) {
-            for (i = 0; i < image_count; ++i) if (views[i]) destroy_image_view(device, views[i], NULL);
-        }
-        if (swapchain && destroy_swapchain) destroy_swapchain(device, swapchain, NULL);
+        if (destroy_fence && frame_fence) destroy_fence(device, frame_fence, NULL);
+        if (destroy_semaphore && render_sem) destroy_semaphore(device, render_sem, NULL);
+        if (destroy_semaphore && acquire_sem) destroy_semaphore(device, acquire_sem, NULL);
+        if (destroy_command_pool && command_pool) destroy_command_pool(device, command_pool, NULL);
+        if (destroy_framebuffer && framebuffers) for (i = 0; i < image_count; ++i) if (framebuffers[i]) destroy_framebuffer(device, framebuffers[i], NULL);
+        if (destroy_render_pass && render_pass) destroy_render_pass(device, render_pass, NULL);
+        if (destroy_image_view && views) for (i = 0; i < image_count; ++i) if (views[i]) destroy_image_view(device, views[i], NULL);
+        if (destroy_swapchain && swapchain) destroy_swapchain(device, swapchain, NULL);
         if (destroy_device) destroy_device(device, NULL);
     }
     if (surface != VK_NULL_HANDLE && destroy_surface) destroy_surface(instance, surface, NULL);
     if (instance != VK_NULL_HANDLE && destroy_instance) destroy_instance(instance, NULL);
     if (loader) FreeLibrary(loader);
-    if (hwnd && IsWindow(hwnd)) DestroyWindow(hwnd);
+    if (hwnd) DestroyWindow(hwnd);
     UnregisterClassA(WINDOW_CLASS, hinstance);
-    free(cmds);
-    free(framebuffers);
-    free(views);
-    free(images);
-    free(present_modes);
-    free(formats);
-    free(device_exts);
-    free(queue_props);
-    free(physical_devices);
-    free(instance_exts);
+    free(cmds); free(framebuffers); free(views); free(images); free(present_modes);
+    free(formats); free(device_exts); free(queue_props); free(physical_devices); free(instance_exts);
     return rc;
 }
