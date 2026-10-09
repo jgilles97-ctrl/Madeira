@@ -181,15 +181,8 @@ int main(void)
     }
     printf("INSTANCE=PASS\n");
 
-#define LOAD_INSTANCE_FN(name, type) \
-    do { \
-        name = (type)get_instance_proc_addr(instance, #name); \
-        if (!(name)) return fail(21, "resolve-instance-functions", "missing " #name); \
-    } while (0)
-
-    /* The C variable names intentionally match the Vulkan function names below
-     * only through separate assignments, because the probe avoids linking the
-     * Vulkan import library. */
+    /* The C variable names intentionally differ from Vulkan export names
+     * because this probe does not link a Vulkan import library. */
     destroy_instance = (PFN_vkDestroyInstance)get_instance_proc_addr(instance, "vkDestroyInstance");
     enumerate_physical_devices =
         (PFN_vkEnumeratePhysicalDevices)get_instance_proc_addr(instance, "vkEnumeratePhysicalDevices");
@@ -291,6 +284,16 @@ int main(void)
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queue_info;
         VkDeviceCreateInfo device_info;
+        const char *enabled_device_exts[1];
+        uint32_t enabled_device_ext_count = 0;
+
+#ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+        if (has_extension(device_exts, device_ext_count,
+                          VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME))
+            enabled_device_exts[enabled_device_ext_count++] =
+                VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+#endif
+
         memset(&queue_info, 0, sizeof(queue_info));
         queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         queue_info.queueFamilyIndex = graphics_queue;
@@ -300,6 +303,8 @@ int main(void)
         device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         device_info.queueCreateInfoCount = 1;
         device_info.pQueueCreateInfos = &queue_info;
+        device_info.enabledExtensionCount = enabled_device_ext_count;
+        device_info.ppEnabledExtensionNames = enabled_device_ext_count ? enabled_device_exts : NULL;
         vr = create_device(physical_devices[0], &device_info, NULL, &device);
         if (vr != VK_SUCCESS || device == VK_NULL_HANDLE) {
             char msg[128];
