@@ -114,15 +114,23 @@ class HunieCamEvidenceContractTests(unittest.TestCase):
         report = mod.validate(preflight(), session(), performance=perf)
         self.assertTrue(report["valid"])
         self.assertTrue(report["warnings"])
-        accepted = {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V5", "accepted": True}
+        accepted = {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V6", "accepted": True}
         report2 = mod.validate(preflight(), session(), performance=perf, acceptance=accepted)
         self.assertFalse(report2["valid"])
 
     def test_acceptance_without_run_context_is_invalid(self):
-        accepted = {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V5", "accepted": True}
+        accepted = {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V6", "accepted": True}
         report = mod.validate(preflight(), acceptance=accepted)
         self.assertFalse(report["valid"])
         self.assertTrue(any("without a per-launch run context" in x for x in report["errors"]))
+
+    def test_acceptance_run_id_must_match_context(self):
+        sess, rec = session(), run_record()
+        ctx = run_context(sess, rec, "run-a")
+        accepted = {"schema": "MADEIRA_HUNIECAM_ACCEPTANCE_V6", "accepted": True, "run_id_sha256": "run-b"}
+        report = mod.validate(preflight(), sess, run_record=rec, acceptance=accepted, run_context=ctx)
+        self.assertFalse(report["valid"])
+        self.assertTrue(any("Acceptance report run ID" in x for x in report["errors"]))
 
 
 if __name__ == "__main__":
