@@ -51,7 +51,11 @@ class HunieCamPipelineTests(unittest.TestCase):
             install.mkdir()
             data = make_install(install)
             madeira = base / "madeira-log.txt"
-            madeira.write_text("[WineProc] Target exe: HunieCamStudio.exe\n")
+            madeira.write_text("\n".join([
+                "[WineProc] Target exe: HunieCamStudio.exe",
+                "fps=60", "fps=59", "fps=61",
+                "[device-load] thermal=nominal low-power=0 capture=0",
+            ]))
             unity = data / "output_log.txt"
             unity.write_text("\n".join([
                 "Initialize engine version: 5.3.4f1",
@@ -63,10 +67,21 @@ class HunieCamPipelineTests(unittest.TestCase):
             ]))
             out = base / "evidence"
             summary = mod.run(install, madeira, unity, out)
+            self.assertEqual(summary["schema"], "MADEIRA_HUNIECAM_PIPELINE_V2")
             self.assertEqual(summary["guard_status"], "PASS")
+            self.assertTrue(summary["evidence_contract_valid"])
+            self.assertTrue(summary["run_record_ready"])
+            self.assertTrue(summary["fps_cap_effective"])
+            self.assertTrue(summary["performance_comparison_clean"])
+            self.assertTrue(summary["owned_build_fingerprint"])
             self.assertGreaterEqual(summary["deepest_stage"], 75)
             self.assertEqual(summary["next_run_status"], "RUN_ACCEPTANCE_BASELINE")
-            for name in ("huniecam-preflight.json", "huniecam-session.json", "huniecam-issues.json", "huniecam-next-run.json", "huniecam-evidence-manifest.json", "huniecam-pipeline-summary.json"):
+            for name in (
+                "huniecam-preflight.json", "huniecam-session.json", "huniecam-issues.json",
+                "huniecam-performance.json", "huniecam-run-record.json",
+                "huniecam-evidence-contract.json", "huniecam-next-run.json",
+                "huniecam-evidence-manifest.json", "huniecam-pipeline-summary.json",
+            ):
                 self.assertTrue((out / name).is_file(), name)
             manifest = json.loads((out / "huniecam-evidence-manifest.json").read_text())
             self.assertTrue(manifest["minimum_review_bundle_complete"])
@@ -82,6 +97,21 @@ class HunieCamPipelineTests(unittest.TestCase):
             out = base / "evidence"
             summary = mod.run(install, madeira, None, out, config_text="d3d9 = native", arguments="-force-d3d9")
             self.assertEqual(summary["guard_status"], "FAIL")
+            self.assertFalse(summary["evidence_contract_valid"])
+
+    def test_pipeline_flags_ineffective_60fps_cap_without_faking_failure_of_core_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            install = base / "game"
+            install.mkdir()
+            make_install(install)
+            madeira = base / "madeira-log.txt"
+            madeira.write_text("fps=90\nfps=92\nfps=91\n[device-load] thermal=nominal low-power=0 capture=0\n")
+            out = base / "evidence"
+            summary = mod.run(install, madeira, None, out)
+            self.assertFalse(summary["fps_cap_effective"])
+            self.assertFalse(summary["performance_comparison_clean"])
+            self.assertTrue(summary["evidence_contract_valid"])
 
 
 if __name__ == "__main__":
