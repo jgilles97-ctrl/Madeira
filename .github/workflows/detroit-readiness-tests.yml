@@ -10,6 +10,7 @@ on:
       - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
+      - "build/moltenvk-ios/build.sh"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
       - "build/win32u-unix/build.sh"
@@ -29,6 +30,7 @@ on:
       - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
+      - "build/moltenvk-ios/build.sh"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
       - "build/win32u-unix/build.sh"
@@ -61,6 +63,12 @@ jobs:
           tests/host/check-detroit-readiness.py
           tests/host/check-detroit-vulkan-contract.py
           build/win32u-unix/patch_driver_vulkan.py
+      - name: Validate shell syntax
+        run: |
+          bash -n build/moltenvk-ios/build.sh
+          bash -n build/win32u-unix/build.sh
+          bash -n tests/x64/build-vulkan-probe.sh
+          bash -n tests/x64/build-vulkan-wsi-probe.sh
       - name: Detroit readiness fixtures
         run: python tests/host/check-detroit-readiness.py
       - name: Detroit Vulkan contract
@@ -69,8 +77,12 @@ jobs:
         run: |
           python build/win32u-unix/patch_driver_vulkan.py \
             build/win32u-unix/driver_ios.c /tmp/driver_ios_vulkan.c
+          grep -q 'extern UINT winios_pVulkanInit' /tmp/driver_ios_vulkan.c
           grep -q 'winios_user_driver.pVulkanInit = winios_pVulkanInit' /tmp/driver_ios_vulkan.c
-          grep -q '__attribute__((weak))' /tmp/driver_ios_vulkan.c
+          if grep -q '__attribute__((weak))' /tmp/driver_ios_vulkan.c; then
+            echo 'error: Vulkan-enabled pVulkanInit must be a strong static-link reference' >&2
+            exit 1
+          fi
       - name: Compile platform-neutral Vulkan WSI helper
         run: >-
           cc -std=c11 -O2 -Wall -Wextra -Werror -fPIC
