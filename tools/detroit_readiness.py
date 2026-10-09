@@ -68,6 +68,27 @@ def _find_first(root: pathlib.Path | None, names: Iterable[str]) -> pathlib.Path
     return None
 
 
+def _config_value(text: str, key: str) -> str | None:
+    """Return the last Madeira-style KEY=value or env.KEY=value setting.
+
+    Per-game config is intentionally line based. Ignore full-line comments and
+    inline comments so a documented example does not get mistaken for an active
+    setting. Last assignment wins, matching the way a user expects overrides to
+    behave when a setting is repeated later in a game-specific profile.
+    """
+
+    result: str | None = None
+    pattern = re.compile(rf"^(?:env\.)?{re.escape(key)}\s*=\s*(.*?)\s*$", re.I)
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = pattern.match(line)
+        if match:
+            result = match.group(1).strip().strip('"\'')
+    return result
+
+
 def audit(
     game_dir: pathlib.Path | None,
     graphics_options: pathlib.Path | None,
@@ -151,22 +172,30 @@ def audit(
     else:
         checks.append(Check("shader_cache", "INFO", "Shader cache was not supplied/found"))
 
-    # Environment / launcher configuration.
+    # Environment / launcher configuration. For the first 8 GB iPad pass, peak
+    # memory is more important than the fastest possible shader compilation.
     env_text = _read(env_file)
     if env_file:
         if not env_text:
             checks.append(Check("env_file", "FAIL", "Environment/config file could not be read", str(env_file)))
         else:
-            compression = re.search(
-                r"MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM[^0-9]*([0-9]+)", env_text, re.I
-            )
-            if compression:
+            compression = _config_value(env_text, "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM")
+            if compression == "3":
                 checks.append(
                     Check(
                         "shader_compression",
                         "PASS",
-                        "MoltenVK shader compression is configured",
-                        f"algorithm={compression.group(1)}",
+                        "Detroit shader compression uses the known-good algorithm",
+                        "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM=3",
+                    )
+                )
+            elif compression is not None:
+                checks.append(
+                    Check(
+                        "shader_compression",
+                        "WARN",
+                        "Detroit shader compression differs from the tested Apple-Silicon setting",
+                        f"value={compression}; first iPad profile uses 3",
                     )
                 )
             else:
@@ -175,20 +204,85 @@ def audit(
                         "shader_compression",
                         "WARN",
                         "MoltenVK shader compression is not visible in the supplied config",
-                        "Successful full-game Apple-Silicon runs required an explicit compression algorithm.",
+                        "Successful full-game Apple-Silicon runs required algorithm 3.",
                     )
                 )
 
-            concurrent = re.search(
-                r"MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION[^0-9]*([01])", env_text, re.I
-            )
-            if concurrent:
+            concurrent = _config_value(env_text, "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION")
+            if concurrent == "0":
                 checks.append(
                     Check(
                         "concurrent_compilation",
+                        "PASS",
+                        "Memory-first shader compilation is enabled",
+                        "value=0; benchmark value=1 only after the 8 GB iPad finishes the shader gate without memory pressure",
+                    )
+                )
+            elif concurrent == "1":
+                checks.append(
+                    Check(
+                        "concurrent_compilation",
+                        "WARN",
+                        "Maximum concurrent shader compilation is enabled",
+                        "Release003 recommends this on a 64 GB Mac, but it can increase peak RAM. Start with 0 on the 8 GB iPad.",
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "concurrent_compilation",
+                        "WARN",
+                        "Shader compilation concurrency is not pinned for the 8 GB profile",
+                        "Set MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION=0 for the first device shader pass.",
+                    )
+                )
+
+            msl_cache = _config_value(env_text, "MVK_DTR_MSL_LIBRARY_CACHE")
+            if msl_cache == "0":
+                checks.append(
+                    Check(
+                        "dtr_msl_library_cache",
+                        "PASS",
+                        "Release003 custom process-wide Metal library cache is disabled",
+                        "memory-first 8 GB baseline; re-enable only after device measurements",
+                    )
+                )
+            elif msl_cache == "1":
+                checks.append(
+                    Check(
+                        "dtr_msl_library_cache",
+                        "WARN",
+                        "Release003 custom Metal library cache is enabled",
+                        "The Detroit fork keeps compiled MTLLibrary objects in a process-wide map for the process lifetime. This is high-risk on an 8 GB iPad.",
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "dtr_msl_library_cache",
+                        "WARN",
+                        "Release003 custom Metal library cache is not explicitly disabled",
+                        "Its fork default is enabled; set MVK_DTR_MSL_LIBRARY_CACHE=0 for the first 8 GB iPad shader pass.",
+                    )
+                )
+
+            device_stats = _config_value(env_text, "MADEIRA_DEVICE_STATS")
+            if device_stats == "1":
+                checks.append(
+                    Check(
+                        "device_stats",
+                        "PASS",
+                        "Madeira device-state diagnostics are enabled",
+                        "thermal state and Low Power Mode will be recorded during the long shader test",
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "device_stats",
                         "INFO",
-                        "Concurrent shader compilation setting detected",
-                        f"value={concurrent.group(1)}; benchmark both values on 8 GB instead of assuming 1 is best",
+                        "Madeira device-state diagnostics are not enabled",
+                        "MADEIRA_DEVICE_STATS=1 is recommended for the first long Detroit shader run.",
                     )
                 )
     else:
@@ -275,6 +369,7 @@ def audit(
         "notes": [
             "This is a readiness/triage tool, not proof that Detroit is compatible with the device.",
             "It never modifies or deletes the game, cache, configuration, or log files.",
+            "The 8 GB memory profile is a conservative first-test baseline, not a claim that faster settings are impossible.",
         ],
     }
 
