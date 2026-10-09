@@ -4,15 +4,20 @@ on:
   push:
     paths:
       - "tools/detroit_readiness.py"
+      - "tools/detroit_vulkan_payload.py"
       - "tests/host/check-detroit-readiness.py"
       - "tests/host/check-detroit-vulkan-contract.py"
+      - "tests/host/check-detroit-vulkan-payload.py"
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/vulkan_swapchain_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
       - "tests/x64/build-vulkan-swapchain-probe.sh"
+      - "build/detroit-vulkan/build.sh"
       - "build/moltenvk-ios/build.sh"
+      - "build/ntdll-unix/build.sh"
+      - "build/ntdll-unix/patch_virtual_winevulkan.py"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
       - "build/win32u-unix/build.sh"
@@ -21,20 +26,26 @@ on:
       - "build/win32u-unix/vulkan_driver_ios.c"
       - "build/win32u-unix/patch_driver_vulkan.py"
       - "build/win32u-unix/driver_ios.c"
+      - "build/wine-pe/build-modules.sh"
       - "app/Madeira/IOSDisplayShim.m"
       - ".github/workflows/detroit-readiness-tests.yml"
   pull_request:
     paths:
       - "tools/detroit_readiness.py"
+      - "tools/detroit_vulkan_payload.py"
       - "tests/host/check-detroit-readiness.py"
       - "tests/host/check-detroit-vulkan-contract.py"
+      - "tests/host/check-detroit-vulkan-payload.py"
       - "tests/x64/vulkan_probe.c"
       - "tests/x64/vulkan_wsi_probe.c"
       - "tests/x64/vulkan_swapchain_probe.c"
       - "tests/x64/build-vulkan-probe.sh"
       - "tests/x64/build-vulkan-wsi-probe.sh"
       - "tests/x64/build-vulkan-swapchain-probe.sh"
+      - "build/detroit-vulkan/build.sh"
       - "build/moltenvk-ios/build.sh"
+      - "build/ntdll-unix/build.sh"
+      - "build/ntdll-unix/patch_virtual_winevulkan.py"
       - "build/ntdll-unix/vulkan_surface_ios.c"
       - "build/ntdll-unix/vulkan_surface_ios.h"
       - "build/win32u-unix/build.sh"
@@ -43,6 +54,7 @@ on:
       - "build/win32u-unix/vulkan_driver_ios.c"
       - "build/win32u-unix/patch_driver_vulkan.py"
       - "build/win32u-unix/driver_ios.c"
+      - "build/wine-pe/build-modules.sh"
       - "app/Madeira/IOSDisplayShim.m"
       - ".github/workflows/detroit-readiness-tests.yml"
 
@@ -64,18 +76,25 @@ jobs:
         run: >-
           python -m py_compile
           tools/detroit_readiness.py
+          tools/detroit_vulkan_payload.py
           tests/host/check-detroit-readiness.py
           tests/host/check-detroit-vulkan-contract.py
+          tests/host/check-detroit-vulkan-payload.py
           build/win32u-unix/patch_driver_vulkan.py
+          build/ntdll-unix/patch_virtual_winevulkan.py
       - name: Validate shell syntax
         run: |
+          bash -n build/detroit-vulkan/build.sh
           bash -n build/moltenvk-ios/build.sh
+          bash -n build/ntdll-unix/build.sh
           bash -n build/win32u-unix/build.sh
           bash -n tests/x64/build-vulkan-probe.sh
           bash -n tests/x64/build-vulkan-wsi-probe.sh
           bash -n tests/x64/build-vulkan-swapchain-probe.sh
       - name: Detroit readiness fixtures
         run: python tests/host/check-detroit-readiness.py
+      - name: Detroit Vulkan payload fixtures
+        run: python tests/host/check-detroit-vulkan-payload.py
       - name: Detroit Vulkan contract
         run: python tests/host/check-detroit-vulkan-contract.py
       - name: Exercise deterministic win32u driver patch
@@ -93,6 +112,13 @@ jobs:
           if 'weak' in match.group(0):
               raise SystemExit('pVulkanInit must be a strong static-link reference')
           PY
+      - name: Exercise winevulkan unixlib registry patch
+        run: |
+          python build/ntdll-unix/patch_virtual_winevulkan.py \
+            build/ntdll-unix/virtual_ios.c /tmp/virtual_ios_vulkan.c
+          grep -q 'extern const void \*winevulkan_unix_call_funcs\[\]' /tmp/virtual_ios_vulkan.c
+          grep -q 'funcs64 = (const void \*)winevulkan_unix_call_funcs' /tmp/virtual_ios_vulkan.c
+          grep -q 'funcs_wow64 = (const void \*)winevulkan_unix_call_wow64_funcs' /tmp/virtual_ios_vulkan.c
       - name: Compile platform-neutral Vulkan WSI helper
         run: >-
           cc -std=c11 -O2 -Wall -Wextra -Werror -fPIC
