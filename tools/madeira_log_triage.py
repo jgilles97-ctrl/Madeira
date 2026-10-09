@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Offline triage for Madeira diagnostic logs.
 
-This utility is intentionally read-only and dependency-free. It recognizes a
-small set of high-signal markers that already exist in Madeira logs and turns
-them into a compact summary for bug reports and device comparison.
+This utility is intentionally read-only and dependency-free. It recognizes
+high-signal Madeira markers and the Detroit physical-device Vulkan gate, then
+turns them into a compact, redacted summary for bug reports and device
+comparison.
 """
 
 from __future__ import annotations
@@ -15,8 +16,24 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-SCHEMA = "MADEIRA_LOG_TRIAGE_V1"
+SCHEMA = "MADEIRA_LOG_TRIAGE_V2"
+DETROIT_GATE_SCHEMA = "MADEIRA_DETROIT_DEVICE_GATE_V1"
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "INFO": 3}
+DETROIT_GATE_ORDER = ("vulkan-device", "win32-surface", "present-120")
+DETROIT_GATE_GUIDANCE = {
+    "vulkan-device": (
+        "The failure is before visible rendering. Inspect vulkan-1.dll / winevulkan loading, "
+        "MoltenVK startup, GPU enumeration, and logical-device creation before changing Detroit itself."
+    ),
+    "win32-surface": (
+        "The Vulkan device worked, so focus on the Wine Win32-surface -> Madeira CAMetalLayer -> "
+        "VkMetalSurfaceEXT bridge and presentation support."
+    ),
+    "present-120": (
+        "Device and surface creation worked. Focus on swapchain creation, acquire/submit/present, "
+        "Metal-layer lifetime, and any memory/thermal failure during sustained presentation."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -123,6 +140,73 @@ def _samples(matches: Iterable[tuple[int, str]], limit: int = 3) -> list[dict[st
     return out
 
 
+def _last_value(lines: list[str], key: str) -> str | None:
+    prefix = key + "="
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped[len(prefix):].strip()
+    return None
+
+
+def _parse_detroit_gate(lines: list[str]) -> dict[str, object]:
+    """Parse only the newest Detroit gate attempt from a potentially long log."""
+    starts = [
+        i for i, line in enumerate(lines)
+        if line.strip() == f"SCHEMA={DETROIT_GATE_SCHEMA}"
+    ]
+    if not starts:
+        return {"detected": False}
+
+    start = starts[-1]
+    gate_lines = lines[start:]
+    stages: list[dict[str, object]] = []
+    for stage_name in DETROIT_GATE_ORDER:
+        stage: dict[str, object] = {"name": stage_name, "status": "NOT_REPORTED"}
+        result_prefix = f"GATE_RESULT={stage_name}:"
+        exit_prefix = f"GATE_CHILD_EXIT={stage_name}:"
+        current_stage: str | None = None
+        for raw in gate_lines:
+            line = raw.strip()
+            if line.startswith("GATE_BEGIN="):
+                current_stage = line.split("=", 1)[1]
+            if line.startswith(result_prefix):
+                stage["status"] = line[len(result_prefix):].strip()
+            elif line.startswith(exit_prefix):
+                stage["exit_code"] = line[len(exit_prefix):].strip()
+            elif current_stage == stage_name and line.startswith("GATE_ERROR="):
+                stage["error"] = line.split("=", 1)[1].strip()
+        stages.append(stage)
+
+    overall = _last_value(gate_lines, "OVERALL") or "INCOMPLETE"
+    failed_gate = _last_value(gate_lines, "FAILED_GATE")
+    next_gate = _last_value(gate_lines, "NEXT_GATE")
+    final_markers = {
+        "vulkan_device": _last_value(gate_lines, "VULKAN_DEVICE"),
+        "win32_surface": _last_value(gate_lines, "WIN32_SURFACE"),
+        "presented_120_frames": _last_value(gate_lines, "PRESENTED_120_FRAMES"),
+    }
+    proof_complete = (
+        overall == "PASS"
+        and final_markers["vulkan_device"] == "PASS"
+        and final_markers["win32_surface"] == "PASS"
+        and final_markers["presented_120_frames"] == "PASS"
+        and all(stage["status"] == "PASS" for stage in stages)
+    )
+
+    return {
+        "detected": True,
+        "schema": DETROIT_GATE_SCHEMA,
+        "start_line": start + 1,
+        "overall": overall,
+        "proof_complete": proof_complete,
+        "failed_gate": failed_gate,
+        "next_gate": next_gate,
+        "stages": stages,
+        "final_markers": final_markers,
+    }
+
+
 def triage_text(text: str) -> dict[str, object]:
     lines = text.splitlines()
     findings: list[dict[str, object]] = []
@@ -141,6 +225,48 @@ def triage_text(text: str) -> dict[str, object]:
                 }
             )
 
+    detroit_gate = _parse_detroit_gate(lines)
+    if detroit_gate.get("detected"):
+        overall = str(detroit_gate.get("overall", "INCOMPLETE"))
+        failed_gate = detroit_gate.get("failed_gate")
+        if overall == "FAIL":
+            gate_name = str(failed_gate or "unknown")
+            guidance = DETROIT_GATE_GUIDANCE.get(
+                gate_name,
+                "Inspect the newest gate attempt from its first GATE_BEGIN line; do not launch Detroit until this gate is understood.",
+            )
+            gate_start = int(detroit_gate.get("start_line", 1))
+            failure_hits = [
+                (i, line)
+                for i, line in enumerate(lines, start=1)
+                if i >= gate_start and (line.strip() == "OVERALL=FAIL" or line.startswith("GATE_ERROR="))
+            ]
+            findings.append(
+                {
+                    "code": "detroit_device_gate_failed",
+                    "severity": "HIGH",
+                    "title": f"Detroit physical-device Vulkan gate failed at {gate_name}",
+                    "count": 1,
+                    "samples": _samples(failure_hits),
+                    "guidance": guidance,
+                }
+            )
+        elif overall != "PASS" or not detroit_gate.get("proof_complete"):
+            gate_start = int(detroit_gate.get("start_line", 1))
+            findings.append(
+                {
+                    "code": "detroit_device_gate_incomplete",
+                    "severity": "MEDIUM",
+                    "title": "Detroit physical-device Vulkan gate did not produce complete proof",
+                    "count": 1,
+                    "samples": _samples([(gate_start, lines[gate_start - 1])]),
+                    "guidance": (
+                        "Run the gate to completion and require all three stage PASS results plus "
+                        "VULKAN_DEVICE=PASS, WIN32_SURFACE=PASS, PRESENTED_120_FRAMES=PASS, and OVERALL=PASS."
+                    ),
+                }
+            )
+
     positive_signals: list[dict[str, object]] = []
     for code, title, pattern in POSITIVE_RULES:
         hits = [(i, line) for i, line in enumerate(lines, start=1) if pattern.search(line)]
@@ -148,6 +274,16 @@ def triage_text(text: str) -> dict[str, object]:
             positive_signals.append(
                 {"code": code, "title": title, "count": len(hits), "samples": _samples(hits)}
             )
+
+    if detroit_gate.get("proof_complete"):
+        positive_signals.append(
+            {
+                "code": "detroit_device_gate_passed",
+                "title": "Detroit local Vulkan device gate proved all three physical-device stages",
+                "count": 1,
+                "samples": [],
+            }
+        )
 
     findings.sort(key=lambda f: (SEVERITY_ORDER[str(f["severity"])], str(f["code"])))
     severity_counts = {sev: 0 for sev in SEVERITY_ORDER}
@@ -161,8 +297,10 @@ def triage_text(text: str) -> dict[str, object]:
         "severity_counts": severity_counts,
         "findings": findings,
         "positive_signals": positive_signals,
+        "detroit_device_gate": detroit_gate,
         "notes": [
             "Heuristic summary only: a matching line is evidence to inspect, not proof of root cause.",
+            "Detroit gate PASS is accepted only from the newest gate attempt and only when all required stage/final markers agree.",
             "The tool is offline/read-only and redacts common local paths and secret-like values from samples.",
         ],
     }
@@ -181,6 +319,32 @@ def render_text(report: dict[str, object], source: pathlib.Path) -> str:
         + ", ".join(f"{sev}={counts.get(sev, 0)}" for sev in ("CRITICAL", "HIGH", "MEDIUM", "INFO")),
         "",
     ]
+
+    gate = report.get("detroit_device_gate")
+    if isinstance(gate, dict) and gate.get("detected"):
+        overall = gate.get("overall", "INCOMPLETE")
+        lines += ["## Detroit physical-device Vulkan gate", f"Overall: **{overall}**"]
+        stages = gate.get("stages", [])
+        if isinstance(stages, list):
+            for stage in stages:
+                if not isinstance(stage, dict):
+                    continue
+                detail = f"- {stage.get('name')}: {stage.get('status', 'NOT_REPORTED')}"
+                if stage.get("exit_code"):
+                    detail += f" (child exit {stage['exit_code']})"
+                if stage.get("error"):
+                    detail += f" — {redact_line(str(stage['error']))}"
+                lines.append(detail)
+        if gate.get("failed_gate"):
+            lines.append(f"- First failed gate: `{gate['failed_gate']}`")
+        if gate.get("next_gate"):
+            lines.append(f"- Next gate: `{gate['next_gate']}`")
+        if gate.get("proof_complete"):
+            lines.append("- Proof status: complete — device, Windows surface, and 120-frame presentation all passed.")
+        else:
+            lines.append("- Proof status: incomplete — do not count this as Detroit-ready graphics yet.")
+        lines.append("")
+
     findings = report["findings"]
     assert isinstance(findings, list)
     if not findings:
