@@ -12,6 +12,7 @@ AMD64 = 0x8664
 EXPECTED_MOLTENVK_REPO = "https://github.com/DiAvisoo/MoltenVK-Detroit.git"
 EXPECTED_MOLTENVK_RELEASE = "Release003"
 EXPECTED_MOLTENVK_COMMIT = "8b511fdc5351a37c305bc246e161796ddca56b18"
+EXPECTED_IPAD_CACHE_PATCH = "MADEIRA_IPAD_DISK_CACHE_SPLIT_V1"
 ARM64EC_MODULES = ("vulkan-1.dll", "winevulkan.dll")
 X64_DEVICE_CANARIES = (
     "vulkan_probe.exe",
@@ -87,13 +88,9 @@ def main() -> int:
     if not expected_commit or len(expected_commit) != 40 or any(c not in "0123456789abcdef" for c in expected_commit):
         failures.append("expected MoltenVK commit must be a full 40-character hexadecimal Git commit")
 
-    # Wine-facing Vulkan modules run natively as ARM64EC inside Madeira.
     for name in ARM64EC_MODULES:
         verify_pe(args.farm / name, ARM64EC, "ARM64EC", failures)
 
-    # The controller and canaries intentionally stay x86-64. If one of these
-    # accidentally becomes ARM64/ARM64EC, the physical gate would stop proving
-    # that the FEX + Wine x64 path used by Detroit is actually alive.
     for name in X64_DEVICE_CANARIES:
         verify_pe(args.farm / name, AMD64, "x86-64", failures)
 
@@ -115,10 +112,13 @@ def main() -> int:
         release = info.get("release")
         ref = info.get("ref")
         commit = (info.get("commit") or "").lower() or None
+        cache_split = info.get("madeira_ipad_cache_split")
+        cache_patch = info.get("madeira_ipad_cache_patch")
         print(
             "INFO MoltenVK "
             f"source={source or 'unknown'} release={release or 'unknown'} "
-            f"ref={ref or 'unknown'} commit={commit or 'unknown'}"
+            f"ref={ref or 'unknown'} commit={commit or 'unknown'} "
+            f"ipad_cache_patch={cache_patch or 'unknown'}"
         )
         if source != EXPECTED_MOLTENVK_REPO:
             failures.append(
@@ -132,9 +132,11 @@ def main() -> int:
             failures.append(
                 f"MoltenVK commit is {commit!r}, expected explicitly audited commit {expected_commit!r}"
             )
-        # A ref may be a human-friendly tag while the commit is immutable. The
-        # commit is the security/reproducibility boundary; make a non-SHA ref
-        # visible without rejecting it once the exact commit has been approved.
+        if cache_split != "1" or cache_patch != EXPECTED_IPAD_CACHE_PATCH:
+            failures.append(
+                "MoltenVK is missing Madeira's audited iPad disk-cache/RAM-cache split; "
+                f"expected madeirа_ipad_cache_split=1 and madeirа_ipad_cache_patch={EXPECTED_IPAD_CACHE_PATCH}"
+            )
         if ref and ref.lower() != expected_commit:
             warnings.append(
                 f"MoltenVK checkout ref is {ref!r}; exact commit proof comes from BUILD-INFO commit={commit or 'unknown'}"
