@@ -62,7 +62,7 @@ def main() -> None:
     require(gate, "GetExitCodeProcess", "child exit-code validation")
     require(gate, "GATE_RESULT=%s:SKIP", "later-stage skip reporting")
     require(gate, "OVERALL=FAIL", "failure summary")
-    require(gate, "OVERALL=PASS", "success summary")
+    require(gate, 'printf("OVERALL=PASS', "runtime success summary")
     require(gate, "PRESENTED_120_FRAMES=PASS", "120-frame success marker")
     require(gate, "NEXT_GATE=detroit-process-and-shader-compilation", "next-gate marker")
 
@@ -91,8 +91,8 @@ def main() -> None:
     require(gate, "FAILED_GATE=payload-fingerprint", "fingerprint failure gate")
     require_order(
         gate,
-        ["payload_fingerprint(&payload_hash)", "run_stage(&stages[i])", "write_full_pass_proof(payload_hash)", "OVERALL=PASS"],
-        "payload-bound proof flow",
+        ["payload_fingerprint(&payload_hash)", "run_stage(&stages[i])", "write_full_pass_proof(payload_hash)", 'printf("OVERALL=PASS'],
+        "payload-bound runtime proof flow",
     )
 
     # Keep the baseline presentation proof display-paced. A 2026 MoltenVK
@@ -109,8 +109,8 @@ def main() -> None:
     require(gate, "if (exit_code != 0)", "nonzero-child failure")
     require_order(
         gate,
-        ["VULKAN_DEVICE=PASS", "WIN32_SURFACE=PASS", "PRESENTED_120_FRAMES=PASS", "OVERALL=PASS"],
-        "final PASS markers",
+        ["VULKAN_DEVICE=PASS", "WIN32_SURFACE=PASS", "PRESENTED_120_FRAMES=PASS", 'printf("OVERALL=PASS'],
+        "final runtime PASS markers",
     )
 
     # Keep the controller itself x86-64 Windows code so it cannot bypass the
