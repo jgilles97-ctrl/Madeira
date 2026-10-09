@@ -93,12 +93,12 @@ fi
 echo "Detroit runtime build ID: $DETROIT_RUNTIME_BUILD_ID"
 
 step "5/6 Windows x64 real-device canaries + one-command gate"
+# build-vulkan-probe.sh links the argument-buffer compute write/readback canary
+# directly into vulkan_probe.exe. This keeps the trusted physical payload at the
+# same four executables while making DETROIT_CAPABILITIES=PASS strictly stronger.
 TEST_BUNDLE_DIR="$FARM" \
 VULKAN_PROBE_OUT="$OUT_DIR/vulkan_probe.exe" \
     "$ROOT/tests/x64/build-vulkan-probe.sh"
-TEST_BUNDLE_DIR="$FARM" \
-VULKAN_COMPUTE_WRITEBACK_PROBE_OUT="$OUT_DIR/vulkan_compute_writeback_probe.exe" \
-    "$ROOT/tests/x64/build-vulkan-compute-writeback-probe.sh"
 TEST_BUNDLE_DIR="$FARM" \
 VULKAN_WSI_PROBE_OUT="$OUT_DIR/vulkan_wsi_probe.exe" \
     "$ROOT/tests/x64/build-vulkan-wsi-probe.sh"
@@ -110,7 +110,6 @@ DETROIT_RUNTIME_BUILD_ID="$DETROIT_RUNTIME_BUILD_ID" \
 VULKAN_DEVICE_GATE_OUT="$OUT_DIR/vulkan-device-gate-x64.exe" \
     "$ROOT/tests/x64/build-vulkan-device-gate.sh"
 need_file "$FARM/vulkan_probe.exe"
-need_file "$FARM/vulkan_compute_writeback_probe.exe"
 need_file "$FARM/vulkan_wsi_probe.exe"
 need_file "$FARM/vulkan_swapchain_probe.exe"
 need_file "$FARM/vulkan-device-gate-x64.exe"
@@ -132,8 +131,10 @@ PASS: Detroit Vulkan runtime layers and on-device gate built.
 Runtime identity: $DETROIT_RUNTIME_BUILD_ID
 
 This is a build gate, not an iPad compatibility claim.
-The five fixed x64 test executables are now bundled with Madeira, and the gate
-itself is bound to the exact local graphics/runtime inputs above.
+The four fixed x64 test executables are bundled with Madeira. The first one now
+contains BOTH the Detroit renderer-capability checks and the argument-buffer
+compute write/readback integrity check. The controller remains bound to the
+exact local graphics/runtime inputs above.
 
 On the physical M4 iPad, open Madeira and tap:
 
@@ -141,7 +142,7 @@ On the physical M4 iPad, open Madeira and tap:
 
 Keep Madeira in the foreground until the test finishes. A valid PASS requires:
   DETROIT_CAPABILITIES=PASS
-  MOLTENVK_ARGUMENT_BUFFER_COMPUTE_INTEGRITY=PASS
+    (includes MOLTENVK_ARGUMENT_BUFFER_COMPUTE_INTEGRITY=PASS in the child log)
   VULKAN_DEVICE=PASS
   WIN32_SURFACE=PASS
   PRESENTED_120_FRAMES=PASS
