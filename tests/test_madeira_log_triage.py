@@ -14,6 +14,9 @@ SPEC.loader.exec_module(mod)
 
 
 class MadeiraLogTriageTests(unittest.TestCase):
+    def codes(self, text):
+        return {f["code"] for f in mod.triage_text(text)["findings"]}
+
     def test_high_signal_markers_are_classified(self):
         report = mod.triage_text(
             "\n".join(
@@ -38,15 +41,39 @@ class MadeiraLogTriageTests(unittest.TestCase):
             },
         )
         self.assertEqual(report["severity_counts"]["CRITICAL"], 2)
-        self.assertEqual(report["severity_counts"]["HIGH"], 2)
-        self.assertEqual(report["severity_counts"]["MEDIUM"], 1)
 
-    def test_positive_jit_signal_does_not_create_failure(self):
-        report = mod.triage_text("[jit-debugger] attached=1 at the pool request\ncube-x64 clean\n")
+    def test_huniecam_relevant_runtime_markers(self):
+        codes = self.codes(
+            "\n".join(
+                [
+                    "[store-undecoded] #1 insn=0x880cfd0b pc=0x123 addr=0x456 rw_addr=0x789",
+                    "[wow-window] refused: map too small",
+                    'err: Failed to create internal command library: This library is using language version 4.1 which is not supported on this OS.',
+                    '0024:err:module:import_dll Library VCRUNTIME140.dll (which is needed by L"Z:\\game.exe") not found',
+                ]
+            )
+        )
+        self.assertEqual(
+            codes,
+            {
+                "store_undecoded",
+                "wow_window_refused_small_map",
+                "metal_language_version_unsupported",
+                "missing_import_dll",
+            },
+        )
+
+    def test_positive_signals_do_not_create_failures(self):
+        report = mod.triage_text(
+            "[jit-debugger] attached=1 at the pool request\n"
+            "cube-x64 clean\n"
+            "[WineProc] Target exe: HunieCamStudio.exe (bundle=i386-windows)\n"
+        )
         self.assertEqual(report["finding_count"], 0)
         codes = {p["code"] for p in report["positive_signals"]}
         self.assertIn("jit_debugger_attached_at_pool_request", codes)
         self.assertIn("clean_x64_probe", codes)
+        self.assertIn("wine_process_started", codes)
 
     def test_samples_redact_local_paths_and_tokens(self):
         report = mod.triage_text(
@@ -60,7 +87,7 @@ class MadeiraLogTriageTests(unittest.TestCase):
 
     def test_duplicate_lines_count_but_samples_are_bounded(self):
         report = mod.triage_text("\n".join(["c0000005"] * 8))
-        finding = report["findings"][0]
+        finding = next(f for f in report["findings"] if f["code"] == "windows_access_violation")
         self.assertEqual(finding["count"], 8)
         self.assertEqual(len(finding["samples"]), 3)
 

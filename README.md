@@ -20,19 +20,20 @@ are, unmodified, inside a single iOS app.
 
 ## This fork: iPad / M-series compatibility lab
 
-This fork tracks upstream Madeira and adds reproducible compatibility tooling for
-M-series iPads. The first fork-specific addition is an offline diagnostic-log
-triage helper with tests and CI, designed to make M4/iPad failures easier to
-compare and report without changing the game runtime.
+This fork tracks upstream Madeira while keeping reproducible compatibility tooling
+for M-series iPads. The tooling is deliberately read-only/evidence-first: it helps
+identify what failed without modifying proprietary game files or pretending a
+partial launch is a successful port.
 
 - [iPad / M-series log triage guide](docs/IPAD_M4_TRIAGE.md)
-- `tools/madeira_log_triage.py` — read-only, dependency-free log summarizer
-- `tests/test_madeira_log_triage.py` — regression tests for known high-signal markers
+- [HunieCam Studio iPad/Madeira workbench](docs/HUNIECAM_STUDIO_IPAD.md)
+- `tools/madeira_log_triage.py` — dependency-free diagnostic-log classifier
+- `tools/huniecam_probe.py` — read-only title preflight and build identity report
+- synthetic regression tests and CI for both helpers
 
-Upstream Madeira remains the source of the emulator/runtime implementation and
-should receive generally useful runtime fixes. This fork's compatibility tooling
-is explicitly experimental and does not claim that every flagged line identifies
-a root cause.
+Upstream Madeira remains the source of the runtime implementation. Generally
+useful runtime fixes should stay aligned with upstream; title-specific work in
+this fork must be justified by repeatable device evidence.
 
 ## How it works
 
@@ -128,6 +129,8 @@ and some inputs that are not in the repository, such as the toolchains.
 | Controllers and touch controls | [`docs/CONTROLLERS.md`](docs/CONTROLLERS.md) |
 | Keyboard, mouse and trackpad | [`docs/KEYBOARD_MOUSE.md`](docs/KEYBOARD_MOUSE.md) |
 | Audio and video | [`docs/MEDIA.md`](docs/MEDIA.md) |
+| iPad / M-series triage | [`docs/IPAD_M4_TRIAGE.md`](docs/IPAD_M4_TRIAGE.md) |
+| HunieCam Studio iPad workbench | [`docs/HUNIECAM_STUDIO_IPAD.md`](docs/HUNIECAM_STUDIO_IPAD.md) |
 | Licensing in detail | [`docs/LICENSING.md`](docs/LICENSING.md) |
 
 ## Licensing

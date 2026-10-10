@@ -1,0 +1,79 @@
+name: HunieCam iPad compatibility checks
+
+on:
+  push:
+    paths:
+      - "tools/huniecam_*.py"
+      - "tools/madeira_log_triage.py"
+      - "tests/test_huniecam_*.py"
+      - "tests/test_madeira_log_triage.py"
+      - "docs/HUNIECAM*.md"
+      - ".github/workflows/huniecam-ipad-compat.yml"
+  pull_request:
+    paths:
+      - "tools/huniecam_*.py"
+      - "tools/madeira_log_triage.py"
+      - "tests/test_huniecam_*.py"
+      - "tests/test_madeira_log_triage.py"
+      - "docs/HUNIECAM*.md"
+      - ".github/workflows/huniecam-ipad-compat.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile every HunieCam helper and test
+        run: >-
+          python -m py_compile
+          tools/huniecam_*.py
+          tools/madeira_log_triage.py
+          tests/test_huniecam_*.py
+          tests/test_madeira_log_triage.py
+
+      # High-risk areas run as named diagnostics first. The final discover step
+      # remains authoritative, but a failure now says which evidence subsystem
+      # regressed instead of only "full suite failed".
+      - name: Diagnose acceptance gates
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_acceptance -v
+      - name: Diagnose final acceptance bundle
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_acceptance_bundle -v
+      - name: Diagnose touch release path and fallback planner
+        continue-on-error: true
+        run: >-
+          python -m unittest -v
+          tests.test_huniecam_input_path_audit
+          tests.test_huniecam_input_fallback
+          tests.test_huniecam_device_evidence
+      - name: Diagnose evidence contract and manifest
+        continue-on-error: true
+        run: >-
+          python -m unittest -v
+          tests.test_huniecam_evidence_contract
+          tests.test_huniecam_evidence_manifest
+      - name: Diagnose repeatability
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_repeatability -v
+      - name: Diagnose save verification
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_save_probe -v
+      - name: Diagnose pipeline integration
+        continue-on-error: true
+        run: python -m unittest tests.test_huniecam_pipeline -v
+
+      - name: Run full HunieCam regression suite
+        run: python -m unittest discover -s tests -p 'test_huniecam_*.py' -v
+      - name: Run generic Madeira log triage regressions
+        run: python -m unittest tests.test_madeira_log_triage -v
