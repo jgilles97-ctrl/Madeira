@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail fast when HunieCam evidence-tool schemas or input-mode contracts drift.
 
-Cycle 8 tracks Pipeline V9, Acceptance V10, Manifest V7, Acceptance Bundle V3,
+Cycle 8 tracks Pipeline V9, Acceptance V10, Manifest V7, Acceptance Bundle V4,
 and Runtime Bundle Audit V1. It also verifies that the producer, run-profile,
 pipeline, acceptance and manifest all agree on the same touch/diagnostic
 input-mode vocabulary.
@@ -71,7 +71,7 @@ EXPECTED_CURRENT = {
     "acceptance": "MADEIRA_HUNIECAM_ACCEPTANCE_V10",
     "manifest": "MADEIRA_HUNIECAM_EVIDENCE_MANIFEST_V7",
     "pipeline": "MADEIRA_HUNIECAM_PIPELINE_V9",
-    "acceptance_bundle": "MADEIRA_HUNIECAM_ACCEPTANCE_BUNDLE_V3",
+    "acceptance_bundle": "MADEIRA_HUNIECAM_ACCEPTANCE_BUNDLE_V4",
 }
 
 def audit() -> dict[str, Any]:
