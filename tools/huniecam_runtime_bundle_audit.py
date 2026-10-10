@@ -4,19 +4,19 @@
 HunieCam Studio is a 32-bit x86 Unity title. A green Python evidence suite is
 not enough: the Madeira build installed on the iPad must actually contain the
 Wine WoW64/FEX bridge and the i386 DXMT renderers. This tool checks those
-artifacts without embedding the user's absolute filesystem paths in its JSON.
+artifacts and seals their exact bytes into a deterministic runtime fingerprint
+without embedding the user's absolute filesystem paths in its JSON.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 from typing import Any
 
 SCHEMA = "MADEIRA_HUNIECAM_RUNTIME_BUNDLE_AUDIT_V1"
 
-# Upstream WOW64.md: without i386-windows/ntdll.dll Madeira never treats a
-# target as 32-bit. The aarch64 half needs Wine's WoW64 DLLs and FEX xtajit.
 WOW64_REQUIRED = (
     "i386-windows/ntdll.dll",
     "i386-windows/kernel32.dll",
@@ -30,9 +30,6 @@ WOW64_REQUIRED = (
     "aarch64-windows/xtajit.dll",
 )
 
-# Clean HunieCam testing is renderer-neutral. The bundle therefore needs both
-# the i386 D3D11 path and the D3D9 shim/emulated fallback before a renderer A/B
-# can be meaningful on the physical device.
 GRAPHICS_REQUIRED = (
     "i386-windows/d3d11.dll",
     "i386-windows/dxgi.dll",
@@ -50,6 +47,14 @@ CANDIDATES = (
 )
 
 
+def _sha256(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _find_runtime_root(path: pathlib.Path) -> tuple[pathlib.Path | None, str | None]:
     path = path.expanduser()
     for label, suffix in CANDIDATES:
@@ -62,8 +67,27 @@ def _find_runtime_root(path: pathlib.Path) -> tuple[pathlib.Path | None, str | N
 def _entry(root: pathlib.Path, relative: str) -> dict[str, Any]:
     path = root / relative
     present = path.is_file()
-    size = path.stat().st_size if present else None
-    return {"relative_path": relative, "present": present, "size_bytes": size}
+    return {
+        "relative_path": relative,
+        "present": present,
+        "size_bytes": path.stat().st_size if present else None,
+        "sha256": _sha256(path) if present else None,
+    }
+
+
+def _runtime_fingerprint(files: dict[str, dict[str, Any]]) -> str | None:
+    if not files or any(not item.get("present") or not item.get("sha256") for item in files.values()):
+        return None
+    material = [
+        {
+            "relative_path": relative,
+            "size_bytes": files[relative]["size_bytes"],
+            "sha256": files[relative]["sha256"],
+        }
+        for relative in sorted(files)
+    ]
+    payload = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def audit(path: pathlib.Path) -> dict[str, Any]:
@@ -76,6 +100,7 @@ def audit(path: pathlib.Path) -> dict[str, Any]:
             "wow64_ready": False,
             "renderer_neutral_ready": False,
             "launch_ready": False,
+            "runtime_set_sha256": None,
             "i386_file_count": 0,
             "files": {},
             "missing_wow64": list(WOW64_REQUIRED),
@@ -93,6 +118,7 @@ def audit(path: pathlib.Path) -> dict[str, Any]:
     wow64_ready = not missing_wow64
     renderer_ready = not missing_graphics
     launch_ready = wow64_ready and renderer_ready
+    runtime_set_sha256 = _runtime_fingerprint(files) if launch_ready else None
 
     errors: list[str] = []
     if "i386-windows/ntdll.dll" in missing_wow64:
@@ -103,7 +129,7 @@ def audit(path: pathlib.Path) -> dict[str, Any]:
         errors.append("The built Madeira bundle is missing one or more i386 DXMT renderer files needed for the clean D3D11 path and controlled D3D9 fallback.")
 
     if launch_ready:
-        next_action = "Runtime bundle is ready for the clean HunieCam physical-iPad launch profile. Keep renderer overrides off for the first run."
+        next_action = "Runtime bundle is ready for the clean HunieCam physical-iPad launch profile. Record runtime_set_sha256 with every device run and keep renderer overrides off for the first run."
     elif missing_wow64:
         next_action = "Rebuild/populate Madeira's i386 Wine farm and aarch64 WoW64/FEX pieces before spending another physical-device run."
     else:
@@ -116,13 +142,14 @@ def audit(path: pathlib.Path) -> dict[str, Any]:
         "wow64_ready": wow64_ready,
         "renderer_neutral_ready": renderer_ready,
         "launch_ready": launch_ready,
+        "runtime_set_sha256": runtime_set_sha256,
         "i386_file_count": i386_count,
         "files": files,
         "missing_wow64": missing_wow64,
         "missing_graphics": missing_graphics,
         "errors": errors,
         "next_action": next_action,
-        "rule": "Do not spend a HunieCam device run on a Madeira bundle that lacks the 32-bit WoW64/FEX runtime or the renderer path being tested.",
+        "rule": "Do not spend a HunieCam device run on a Madeira bundle that lacks the 32-bit WoW64/FEX runtime or renderer path. Do not combine repeatability evidence from different runtime_set_sha256 values.",
     }
 
 
