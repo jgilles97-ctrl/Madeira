@@ -31,7 +31,7 @@ jobs:
         run: python -m py_compile tools/huniecam_*.py tests/test_huniecam_*.py
       - name: Audit schema synchronization
         run: python tools/huniecam_schema_audit.py
-      - name: Run provenance and dependency guardrails
+      - name: Run provenance, dependency and runtime-bundle guardrails
         run: >-
           python -m unittest -v
           tests.test_huniecam_run_record
@@ -39,6 +39,7 @@ jobs:
           tests.test_huniecam_pe_imports
           tests.test_huniecam_native_modules
           tests.test_huniecam_dependency_plan
+          tests.test_huniecam_runtime_bundle_audit
           tests.test_huniecam_evidence_contract
           tests.test_huniecam_evidence_manifest
           tests.test_huniecam_run_compare
