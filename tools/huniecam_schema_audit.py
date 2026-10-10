@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Fail fast when HunieCam evidence-tool schemas or input-mode contracts drift.
 
-Cycle 8 tracks Pipeline V9, Acceptance V10, Manifest V7 and Acceptance Bundle V3.
-It also verifies that the producer, run-profile, pipeline, acceptance and manifest
-all agree on the same touch/diagnostic input-mode vocabulary.
+Cycle 8 tracks Pipeline V9, Acceptance V10, Manifest V7, Acceptance Bundle V3,
+and Runtime Bundle Audit V1. It also verifies that the producer, run-profile,
+pipeline, acceptance and manifest all agree on the same touch/diagnostic
+input-mode vocabulary.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import huniecam_probe as probe
 import huniecam_repeatability as repeatability
 import huniecam_run_context as run_context
 import huniecam_run_record as run_record
+import huniecam_runtime_bundle_audit as runtime_bundle_audit
 import huniecam_save_probe as save_probe
 import huniecam_session_triage as session_triage
 
@@ -38,6 +40,7 @@ CURRENT = {
     "run_context": run_context.SCHEMA,
     "pe_imports": pe_imports.SCHEMA,
     "native_modules": native_modules.SCHEMA,
+    "runtime_bundle": runtime_bundle_audit.SCHEMA,
     "device_evidence": device_evidence.SCHEMA,
     "save_snapshot": save_probe.SNAPSHOT_SCHEMA,
     "save_compare": save_probe.COMPARE_SCHEMA,
@@ -58,6 +61,7 @@ EXPECTED_CURRENT = {
     "run_context": "MADEIRA_HUNIECAM_RUN_CONTEXT_V2",
     "pe_imports": "MADEIRA_HUNIECAM_PE_IMPORTS_V1",
     "native_modules": "MADEIRA_HUNIECAM_NATIVE_MODULES_V1",
+    "runtime_bundle": "MADEIRA_HUNIECAM_RUNTIME_BUNDLE_AUDIT_V1",
     "device_evidence": "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3",
     "save_snapshot": "MADEIRA_HUNIECAM_SAVE_SNAPSHOT_V2",
     "save_compare": "MADEIRA_HUNIECAM_SAVE_COMPARE_V2",
@@ -94,7 +98,7 @@ def audit() -> dict[str, Any]:
     if not (run_modes==pipeline_modes==diagnostic_modes):errors.append(f"All input-mode vocabulary drift: run_record={sorted(run_modes)}, pipeline={sorted(pipeline_modes)}, device={sorted(diagnostic_modes)}.")
     if not producer_touch.issubset(run_modes):errors.append("Touch acceptance modes are not all valid sealed run-profile modes.")
 
-    return {"schema":SCHEMA,"passed":not errors,"current":CURRENT,"expected_current":EXPECTED_CURRENT,"contract_supported":{k:sorted(v) for k,v in evidence_contract.SUPPORTED.items()},"input_modes":{"touch":sorted(producer_touch),"all":sorted(run_modes)},"errors":errors,"rule":"A producer schema bump or input-mode vocabulary change must update this explicit matrix and every consumer. Silent schema or interaction-profile drift is a CI failure."}
+    return {"schema":SCHEMA,"passed":not errors,"current":CURRENT,"expected_current":EXPECTED_CURRENT,"contract_supported":{k:sorted(v) for k,v in evidence_contract.SUPPORTED.items()},"input_modes":{"touch":sorted(producer_touch),"all":sorted(run_modes)},"errors":errors,"rule":"A producer schema bump or input-mode vocabulary change must update this explicit matrix and every consumer. Silent schema, runtime-audit or interaction-profile drift is a CI failure."}
 def main()->int:
     p=argparse.ArgumentParser(description="Audit HunieCam evidence schema/input-mode synchronization");p.add_argument("--json",dest="json_path");args=p.parse_args();report=audit();text=json.dumps(report,indent=2,sort_keys=True)
     if args.json_path:
