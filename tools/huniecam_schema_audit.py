@@ -2,9 +2,9 @@
 """Fail fast when HunieCam evidence-tool schemas or input-mode contracts drift.
 
 Cycle 8 tracks Pipeline V9, Acceptance V10, Manifest V7, Acceptance Bundle V4,
-and Runtime Bundle Audit V1. It also verifies that the producer, run-profile,
-pipeline, acceptance and manifest all agree on the same touch/diagnostic
-input-mode vocabulary.
+Runtime Bundle Audit V1, and Attempt Ledger V4. It also verifies that the
+producer, run-profile, pipeline, acceptance and manifest all agree on the same
+touch/diagnostic input-mode vocabulary.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from typing import Any
 
 import huniecam_acceptance as acceptance
 import huniecam_acceptance_bundle as acceptance_bundle
+import huniecam_attempt_ledger as attempt_ledger
 import huniecam_config_guard as config_guard
 import huniecam_device_evidence as device_evidence
 import huniecam_evidence_contract as evidence_contract
@@ -41,6 +42,7 @@ CURRENT = {
     "pe_imports": pe_imports.SCHEMA,
     "native_modules": native_modules.SCHEMA,
     "runtime_bundle": runtime_bundle_audit.SCHEMA,
+    "attempt_ledger": attempt_ledger.SCHEMA,
     "device_evidence": device_evidence.SCHEMA,
     "save_snapshot": save_probe.SNAPSHOT_SCHEMA,
     "save_compare": save_probe.COMPARE_SCHEMA,
@@ -62,6 +64,7 @@ EXPECTED_CURRENT = {
     "pe_imports": "MADEIRA_HUNIECAM_PE_IMPORTS_V1",
     "native_modules": "MADEIRA_HUNIECAM_NATIVE_MODULES_V1",
     "runtime_bundle": "MADEIRA_HUNIECAM_RUNTIME_BUNDLE_AUDIT_V1",
+    "attempt_ledger": "MADEIRA_HUNIECAM_ATTEMPT_LEDGER_V4",
     "device_evidence": "MADEIRA_HUNIECAM_DEVICE_EVIDENCE_V3",
     "save_snapshot": "MADEIRA_HUNIECAM_SAVE_SNAPSHOT_V2",
     "save_compare": "MADEIRA_HUNIECAM_SAVE_COMPARE_V2",
@@ -85,6 +88,7 @@ def audit() -> dict[str, Any]:
         if schema not in allowed:errors.append(f"Evidence Contract {evidence_contract.SCHEMA} does not support current {kind} schema {schema}.")
     if repeatability.REQUIRED_CONTEXT_SCHEMA!=run_context.SCHEMA:errors.append(f"Repeatability requires {repeatability.REQUIRED_CONTEXT_SCHEMA}, but current run context is {run_context.SCHEMA}.")
     if getattr(acceptance,"DEVICE_SCHEMA",None)!=device_evidence.SCHEMA:errors.append(f"Acceptance requires device schema {getattr(acceptance,'DEVICE_SCHEMA',None)}, but current producer is {device_evidence.SCHEMA}.")
+    if getattr(attempt_ledger,"RUNTIME_SCHEMA",None)!=runtime_bundle_audit.SCHEMA:errors.append(f"Attempt Ledger requires runtime schema {getattr(attempt_ledger,'RUNTIME_SCHEMA',None)}, but current runtime audit producer is {runtime_bundle_audit.SCHEMA}.")
 
     producer_touch=set(getattr(device_evidence,"TOUCH_INPUT_MODES",set()))
     acceptance_touch=set(getattr(acceptance,"TOUCH_INPUT_MODES",set()))
@@ -95,10 +99,11 @@ def audit() -> dict[str, Any]:
     run_modes=set(getattr(run_record,"INPUT_MODES",set()))
     pipeline_modes=set(getattr(pipeline,"INPUT_MODES",()))
     diagnostic_modes=set(getattr(device_evidence,"DIAGNOSTIC_INPUT_MODES",set()))
-    if not (run_modes==pipeline_modes==diagnostic_modes):errors.append(f"All input-mode vocabulary drift: run_record={sorted(run_modes)}, pipeline={sorted(pipeline_modes)}, device={sorted(diagnostic_modes)}.")
+    ledger_modes=set(getattr(attempt_ledger,"INPUT_MODES",set()))
+    if not (run_modes==pipeline_modes==diagnostic_modes==ledger_modes):errors.append(f"All input-mode vocabulary drift: run_record={sorted(run_modes)}, pipeline={sorted(pipeline_modes)}, device={sorted(diagnostic_modes)}, ledger={sorted(ledger_modes)}.")
     if not producer_touch.issubset(run_modes):errors.append("Touch acceptance modes are not all valid sealed run-profile modes.")
 
-    return {"schema":SCHEMA,"passed":not errors,"current":CURRENT,"expected_current":EXPECTED_CURRENT,"contract_supported":{k:sorted(v) for k,v in evidence_contract.SUPPORTED.items()},"input_modes":{"touch":sorted(producer_touch),"all":sorted(run_modes)},"errors":errors,"rule":"A producer schema bump or input-mode vocabulary change must update this explicit matrix and every consumer. Silent schema, runtime-audit or interaction-profile drift is a CI failure."}
+    return {"schema":SCHEMA,"passed":not errors,"current":CURRENT,"expected_current":EXPECTED_CURRENT,"contract_supported":{k:sorted(v) for k,v in evidence_contract.SUPPORTED.items()},"input_modes":{"touch":sorted(producer_touch),"all":sorted(run_modes)},"errors":errors,"rule":"A producer schema bump, runtime-ledger contract change, or input-mode vocabulary change must update this explicit matrix and every consumer. Silent schema, runtime-audit, ledger-provenance or interaction-profile drift is a CI failure."}
 def main()->int:
     p=argparse.ArgumentParser(description="Audit HunieCam evidence schema/input-mode synchronization");p.add_argument("--json",dest="json_path");args=p.parse_args();report=audit();text=json.dumps(report,indent=2,sort_keys=True)
     if args.json_path:
