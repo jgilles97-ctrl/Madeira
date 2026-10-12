@@ -54,13 +54,17 @@ class LauncherCoverageTests(unittest.TestCase):
         )
         self.assertNotRegex(code_only, r"\bInternetCheckConnection[AW]?\s*\(")
 
-    def test_x64_builder_is_repo_relative_and_links_dwrite(self):
+    def test_x64_builder_is_repo_relative_links_dwrite_and_keeps_mingw_nlm_adapter(self):
         text = (ROOT / "tests/x64/build.sh").read_text(encoding="utf-8")
         self.assertIn('REPO_ROOT="$(cd "$DIR/../.." && pwd)"', text)
         self.assertNotIn("/Users/willfaust/", text)
         self.assertIn("sims4-launcher-canary", text)
         for lib in ("-lole32", "-luuid", "-ldwrite", "-lws2_32", "-lwinhttp", "-ladvapi32"):
             self.assertIn(lib, text)
+        self.assertIn(
+            "-DINetworkListManager_get_IsConnectedToInternet=INetworkListManager_IsConnectedToInternet",
+            text,
+        )
 
 
 if __name__ == "__main__":
