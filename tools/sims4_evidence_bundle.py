@@ -39,7 +39,7 @@ def make_bundle(
     }
     expected = {
         "preflight": "SIMS4_IPAD_PREFLIGHT_V2",
-        "runtime": "SIMS4_MADEIRA_RUNTIME_AUDIT_V1",
+        "runtime": "SIMS4_MADEIRA_RUNTIME_AUDIT_V2",
         "triage": "SIMS4_MADEIRA_TRIAGE_V1",
     }
     if ea_prefix is not None:
@@ -63,9 +63,6 @@ def make_bundle(
     if triage.get("success_claim") not in (None, "UNPROVEN"):
         blockers.append("TRIAGE_MADE_UNSUPPORTED_SUCCESS_CLAIM")
 
-    # Static gates must win over a later log-derived gate. This prevents a stale
-    # device log from sending the next run forward when the payload/prefix has
-    # since become incomplete.
     if not payload_ready:
         next_gate = preflight.get("next_gate") or "FIX_STATIC_PAYLOAD"
     elif ea_prefix is not None and not ea_static_ready:
@@ -93,6 +90,8 @@ def make_bundle(
         "input_sha256": input_hashes or {},
         "game_executable_sha256": (preflight.get("game_executable") or {}).get("sha256"),
         "runtime_fingerprint_sha256": runtime_fp,
+        "runtime_validated_launcher_coverage_present": runtime.get("validated_launcher_coverage_present"),
+        "runtime_validated_launcher_coverage_total": runtime.get("validated_launcher_coverage_total"),
         "ea_prefix_included": ea_prefix is not None,
         "ea_prefix_static_ready": ea_static_ready,
         "ea_component_sha256": ea_component_hashes,
