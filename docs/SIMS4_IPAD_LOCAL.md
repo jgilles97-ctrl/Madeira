@@ -21,51 +21,146 @@ Memory+, a per-game library, Wine desktop launch mode, per-game config, touch
 controls, keyboard/mouse/controller input, audio/video support, and 30 FPS
 pacing when the bundled DXMT supports it.
 
-## Why the project is split into two independent gates
+A key architectural constraint is that Windows child processes are pseudo-
+processes inside one iOS Mach task. Steam/Chromium work in Madeira proves that
+real Chromium helpers can run under this model, but a helper fault can threaten
+the whole app. Therefore EA CEF work must classify helper roles and collect
+role-specific evidence before any containment/gating change is attempted.
 
-The Sims 4 itself is a 64-bit D3D11 game, but the normal Windows launch chain
-also uses EA App. A launcher failure and a game/rendering failure are different
-problems. Do not change both at once.
+## Gate A — launcher prerequisites and EA App
 
-### Gate A — EA App qualification
+Do not jump straight into EA App. Qualify the smaller dependencies first.
 
-Prove, on the iPad, that one Wine session can keep the EA launcher and its
-children/services alive long enough to reach a stable signed-in/offline-capable
-EA App UI and start TS4.
+### A0 — static EA prefix audit
 
-First profile:
+```bash
+python3 tools/sims4_ea_prefix_audit.py "/path/to/wine-prefix" \
+  --json sims4-ea-prefix.json
+```
 
-- launch the EA executable inside the Wine desktop, not directly;
-- enable "Start Windows services first" when testing service/RPC behaviour;
-- use 1280×720, Fit;
+This inventories and hashes:
+
+- `EADesktop.exe`;
+- `EALauncher.exe`;
+- `EABackgroundService.exe`;
+- `EACefSubProcess.exe`;
+- `system.reg` / `user.reg` service and Network List Manager registration;
+- `C:\ProgramData\EA Desktop\backgroundservice.ini` when present.
+
+Presence of `backgroundservice.ini` does **not** mean it is stale. Proton's
+current EA workaround only removes it after the Windows service is proven
+`STOPPED` or `STOP_PENDING`; preserve/capture the file first and change that one
+variable only.
+
+### A1 — exact runtime audit
+
+```bash
+python3 tools/sims4_runtime_audit.py \
+  --json sims4-runtime-audit.json
+```
+
+The SHA-256 runtime fingerprint binds each device run to an exact ARM64EC
+runtime. Never compare two runs as though they used the same runtime unless the
+fingerprint matches.
+
+The v2 audit separates three kinds of modules:
+
+- core runtime: D3D11, DXGI, XTAJIT64;
+- generic network coverage: WinHTTP;
+- physically validated Madeira launcher coverage: `netprofm.dll`, `sensapi.dll`,
+  `avifil32.dll`, `msvfw32.dll`.
+
+The last four have been built and exercised successfully in physical Madeira
+secondary-launcher testing. That is stronger evidence than a guess, but it is
+still **not proof EA App requires each DLL**. The branch builds them as launcher
+coverage and lets the canary/import logs decide causality.
+
+### A2 — small x64 launcher canary
+
+The branch provides `tests/x64/sims4-launcher-canary.c`. The cloud macOS job
+builds it as a real x86-64 Windows PE alongside the four ARM64EC coverage DLLs.
+
+On iPad it checks, in dependency order:
+
+1. x64/FEX execution;
+2. child-process/pseudo-process handoff;
+3. Service Control Manager access;
+4. `EABackgroundService` registration/query, exact state and PID;
+5. `sensapi!IsNetworkAlive`;
+6. `INetworkListManager` through `netprofm.dll`;
+7. raw TCP to 1.1.1.1:443;
+8. WinHTTP HTTPS.
+
+It deliberately does **not** call `InternetCheckConnectionW`; upstream Madeira
+physical testing found that probe unsafe on the affected baseline.
+
+Parse a device canary log with:
+
+```bash
+python3 tools/sims4_launcher_canary_parse.py launcher-canary.log \
+  --json sims4-launcher-canary.json
+```
+
+The parser works the earliest failed prerequisite first. A fully passing canary
+only advances to `LAUNCH_EA_APP_IN_WINE_DESKTOP`; it does not claim EA App or
+The Sims 4 works.
+
+Networking must be tested after Madeira performs its normal JIT/VPN handoff.
+Do not manually tear down the JIT VPN early: upstream device evidence shows raw
+TCP/WinHTTP may report no route while the LocalDevVPN path is still active.
+
+### A3 — EA App desktop/service/CEF qualification
+
+First EA profile:
+
+- launch through the Wine desktop so explorer keeps the Wine session alive;
+- start Windows services first when qualifying service/RPC behavior;
+- 1280×720, Fit;
 - frame generation off;
-- no renderer override unless the log proves the launcher graphics path needs
-  one;
-- keep JIT and Memory+ green before starting;
-- capture `madeira-log.txt` from the first failure;
-- change one variable per run.
+- no renderer override until the log identifies a graphics problem;
+- JIT and Memory+ ready;
+- one variable per run;
+- capture Madeira/Wine log plus EA helper command lines.
 
-Why desktop mode first: secondary launchers commonly start a real child process
-and then exit. If the first Wine process exits, a direct Madeira session can
-end too. Explorer staying alive removes that ambiguity.
+Current triage recognizes separate EA failure families: service/RPC, stale
+background-service state, update/symlink behavior, MSI/update failures, DirtySDK
+networking, CEF, launcher hard-error exits, missing DLLs, route/WinHTTP state,
+DXMT and guest access violations.
 
-### Gate B — TS4 qualification
+### A4 — classify Chromium helpers
+
+```bash
+python3 tools/sims4_ea_cef_roles.py madeira-log.txt \
+  --json sims4-ea-cef-roles.json
+```
+
+The classifier separates roles such as:
+
+- `--type=gpu-process`;
+- `--type=renderer`;
+- `--type=utility`;
+- `--utility-sub-type=network.mojom.NetworkService`.
+
+It is observation-only. Do not kill, skip or special-case `EACefSubProcess.exe`
+by executable name. Madeira has already demonstrated that Chromium can run in
+its pseudo-process model; helper containment needs role-specific device evidence.
+
+## Gate B — TS4 qualification
 
 Only after Gate A can start `TS4_x64.exe` in the same session:
 
-1. confirm `TS4_x64.exe` is seen as x86-64;
-2. confirm the built-in x64 DX11 cube succeeds on the same Madeira build;
-3. start at 1280×720 / Low / 30 FPS / Fit / frame generation off;
-4. first success marker is a visible TS4 window/frame, not merely a process;
-5. next marker is main menu;
-6. then load a household;
-7. then save, fully relaunch, and verify the save;
-8. add DLC validation after base gameplay is repeatable;
-9. build the touch-first profile last so input work does not hide runtime faults.
+1. confirm `TS4_x64.exe` is x86-64;
+2. confirm the x64/FEX/Wine launcher canary succeeds;
+3. confirm the built-in x64 DX11 canary succeeds on the same Madeira runtime;
+4. start TS4 at 1280×720 / Low / 30 FPS / Fit / frame generation off;
+5. first success marker is a visible TS4 frame, not merely a process;
+6. reach main menu;
+7. load a household;
+8. save, fully relaunch, and restore the save;
+9. validate a small DLC sample before the full DLC set;
+10. build the touch-first profile after the runtime is stable.
 
-## Static preflight
-
-Run:
+## Static Sims payload preflight
 
 ```bash
 python3 tools/sims4_ipad_preflight.py "/path/to/The Sims 4" \
@@ -73,94 +168,43 @@ python3 tools/sims4_ipad_preflight.py "/path/to/The Sims 4" \
   --json sims4-preflight.json
 ```
 
-The tool checks:
+It checks the x86-64 PE executable, basic game folder shape, DLC inventory and,
+when supplied, the expected EA binaries. `payload_ready=true` is static evidence
+only.
 
-- `Game/Bin/TS4_x64.exe` exists;
-- it is a PE x86-64 executable;
-- the basic game folder shape exists;
-- DLC folders are inventoried;
-- when an EA prefix is supplied, the expected EA App executables are present.
-
-`payload_ready=true` is only a static-file gate. It does not mean the game runs.
-
-## Exact runtime fingerprint
-
-Before a physical device run, fingerprint the Windows runtime that will be
-inside Madeira:
-
-```bash
-python3 tools/sims4_runtime_audit.py \
-  --json sims4-runtime-audit.json
-```
-
-The fingerprint is a SHA-256 identity of every checked-in ARM64EC runtime file,
-its size, and its own SHA-256. Record it with every device log. Never compare two
-runs as though they used the same runtime unless this fingerprint matches.
-
-The audit also records launcher-risk modules. These are hypotheses derived from
-related secondary-launcher work, not assumed EA App requirements. A missing
-risk module is **not** a failure. Build/add one only after a device import log or
-a controlled canary proves that module is actually needed.
-
-At the October 12, 2026 baseline the checked-in runtime audit identifies D3D11,
-DXGI, XTAJIT64 and WinHTTP as bundled. `netprofm.dll`, `sensapi.dll`,
-`avifil32.dll`, and `msvfw32.dll` are not bundled. This is an inventory fact,
-not proof that EA App needs those four files.
-
-## Log triage
-
-After every device run:
+## Device log triage
 
 ```bash
 python3 tools/sims4_log_triage.py madeira-log.txt \
   --json sims4-triage.json
 ```
 
-The report separates failures into runtime/JIT, loader/DLL, EA App service/CEF,
-process lifetime, graphics/DXMT, and guest crash stages. Work the *earliest*
-high-signal failure first.
+Always work the earliest high-signal failure first. Later errors are frequently
+secondary noise.
 
 ## Reproducible evidence bundle
-
-Tie the payload, runtime, and log analysis together:
 
 ```bash
 python3 tools/sims4_evidence_bundle.py \
   --preflight sims4-preflight.json \
   --runtime-audit sims4-runtime-audit.json \
+  --ea-prefix-audit sims4-ea-prefix.json \
   --triage sims4-triage.json \
   --run-id ipad-YYYY-MM-DD-NNN \
   --out sims4-evidence.json
 ```
 
-The bundle records hashes and the next gate. It deliberately cannot declare a
-physical-device success. That requires direct device evidence.
-
-## Current highest-risk areas
-
-1. **EA App / secondary-launcher support.** Madeira issue reports for other
-   launchers show that services, child-process lifetime, missing 64-bit Wine
-   DLLs and network-state APIs can block a launcher even after the game itself
-   is otherwise runnable.
-2. **EA App CEF.** Modern EA App uses Chromium subprocesses and D3D11. Keep this
-   as its own qualification gate.
-3. **Memory pressure.** The iPad has 8 GB unified memory. The base game is a
-   better first target than the full DLC set. Measure, do not assume.
-4. **DX11/DXMT compatibility.** The current game requires DirectX 11. A failing
-   Madeira x64 DX11 cube means the Sims test is not yet meaningful.
-5. **Storage.** The full install plus DLC is large. Stage only what is needed
-   for the next gate when practical; do not duplicate tens of gigabytes inside
-   the app container without a reason.
+The bundle binds game/runtime/EA component hashes, EA background-service state
+file identity, findings and next gate. Static blockers outrank stale device
+logs. The bundle can never promote physical-device success by itself.
 
 ## Acceptance ladder
 
-A run only advances one rung when there is evidence:
-
-- `P0` static payload validated;
+- `P0` static game + optional EA-prefix payload validated;
 - `P1` Madeira JIT + Memory+ ready;
-- `P2` x64/FEX/Wine canary passes;
+- `P2` x64/FEX/Wine launcher canary passes;
 - `P3` x64 DX11 canary passes;
-- `P4` EA App UI stable;
+- `P4` EA App UI stable, with CEF roles understood;
 - `P5` EA App starts TS4;
 - `P6` TS4 process survives initialization;
 - `P7` first visible TS4 frame;
@@ -171,48 +215,69 @@ A run only advances one rung when there is evidence:
 - `P12` touch-first control profile;
 - `P13` 30-minute stable session and three cold-launch successes.
 
-CI and static tools may prove P0 only. Physical-device evidence is required for
-P1–P13.
+CI/static tools cannot prove P1–P13. Physical-device evidence is required.
 
-## Improved high-leverage iteration prompt
+## Current high-risk areas
 
-Use this instruction for every autonomous/cloud continuation of this project:
+1. EA App service/RPC/update compatibility.
+2. CEF helper behavior inside Madeira's one-Mach-task pseudo-process model.
+3. Guest networking after the JIT VPN handoff, especially Windows connectivity
+   APIs vs raw TCP/WinHTTP.
+4. iPad memory pressure once EA CEF and TS4 coexist.
+5. D3D11/DXMT compatibility at TS4 initialization.
+6. Full-DLC storage and memory cost after base-game repeatability.
 
-> Continue the local iPad Pro M4 The Sims 4 project in
-> `jgilles97-ctrl/Madeira`, branch `sim4-ipad-local-v2`, PR #8. Streaming does
-> not count. Treat the Mac installation only as reference/storage. Start by
-> reading the current branch, PR, CI results, upstream Madeira changes, and the
-> latest evidence bundle/device log if one exists. Identify the earliest
-> unproven P0–P13 gate. Choose the highest-information, lowest-risk unblocked
-> experiment or implementation that can move that gate. Prefer current
-> authoritative evidence and inspect source rather than guessing. Make one
-> reversible, observable change at a time. Add instrumentation before blind
-> workarounds. Run relevant unit/static/CI tests, preserve exact game/runtime
-> hashes and configuration, and update the branch/PR with what was learned.
-> When a hypothesis fails, record the elimination and choose a genuinely
-> different next hypothesis. Do not count identical reruns as progress. Do not
-> add speculative Wine DLLs just because another launcher needed them; require
-> an import log or controlled canary. Do not claim P1–P13 from cloud CI or host
-> tests. If physical-device evidence is unavailable, improve the next physical
-> experiment, instrumentation, canaries, runtime audit, compatibility research,
-> or regression coverage instead of inventing success. Repeat as long as each
-> pass produces new evidence, code, a test, a benchmark, an eliminated
-> hypothesis, or a more discriminating next experiment.
+## Improved high-leverage iteration prompt — v4
+
+> Continue `jgilles97-ctrl/Madeira`, branch `sim4-ipad-local-v2`, PR #8 toward
+> P13: The Sims 4 running fully locally on the iPad Pro M4. Streaming never
+> counts. The Mac installation is reference/storage only. At the start of each
+> pass inspect the current branch head, PR, newest CI jobs/artifacts, upstream
+> Madeira/Wine/Proton changes, latest static game preflight, EA-prefix audit,
+> exact runtime fingerprint, launcher-canary result, CEF-role report and newest
+> physical-device evidence if available. Identify the earliest unproven gate.
+> Rank candidate work by information gained × reversibility ÷ physical-device
+> cost. Prefer small canaries that distinguish multiple hypotheses before large
+> EA/Sims launches. For EA use this order unless evidence disproves it: static
+> prefix → exact runtime → x64 launcher canary → service state/network APIs → EA
+> Wine-desktop launch → CEF role classification → TS4 → rendering/gameplay.
+> Preserve exact hashes/configuration and one-change-per-run. Treat the four
+> upstream-validated ARM64EC launcher DLLs as tested runtime coverage, not
+> assumed EA requirements. Never delete `backgroundservice.ini` unless the EA
+> service is proven STOPPED/STOP_PENDING and the file is captured first. Never
+> use `InternetCheckConnectionW` on the affected Madeira baseline. Do not kill
+> or skip a Chromium helper based only on `EACefSubProcess.exe`; classify its
+> role and require causal device evidence. Exhaust source inspection, offline
+> disassembly, host tests and cloud builds before spending a physical iPad run.
+> When a hypothesis fails, record that elimination and move to a genuinely
+> different discriminator. Every repeated pass must add evidence, code, a test,
+> a benchmark, a runtime artifact, or an eliminated hypothesis. Never claim a
+> physical gate from host/CI evidence and never convert repeated regression
+> passes into fictional device launches.
+
+## Repeated-analysis coverage
+
+The branch contains independent deterministic stress suites for:
+
+- 678 generic Sims/Madeira diagnostic decisions;
+- 678 EA-specific launcher failure decisions;
+- 678 EA CEF helper-role decisions;
+- 678 launcher-canary decision passes.
+
+That is 2,712 diagnostic decisions per Python version. The main CI tests three
+Python versions, so a complete green matrix exercises 8,136 deterministic
+iterations. These are regression/decision passes, **not** 8,136 iPad launches.
 
 ## Iteration rule
 
 A repeated run counts as progress only when it produces at least one of:
 
-- new device evidence;
-- one code/config change;
-- one eliminated hypothesis;
+- new physical-device evidence;
+- a code/configuration change;
+- an eliminated hypothesis;
 - a benchmark;
 - a regression test;
-- a reproducibility result for an explicitly stated gate.
+- a new cloud build artifact;
+- a more discriminating next experiment.
 
-The host convergence test deliberately performs 678 diagnostic passes over
-multiple failure classes. This satisfies the repeated-analysis requirement in a
-reproducible way; it is **not** represented as 678 physical iPad launches.
-
-Do not count identical reruns as extra progress, and do not claim a gate is
-passed from CI when it requires the physical iPad.
+Do not count identical reruns as extra progress.
