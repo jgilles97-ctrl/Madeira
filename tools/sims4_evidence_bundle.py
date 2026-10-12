@@ -46,7 +46,7 @@ def make_bundle(
     }
     if ea_prefix is not None:
         schemas["ea_prefix"] = ea_prefix.get("schema")
-        expected["ea_prefix"] = "SIMS4_EA_PREFIX_AUDIT_V1"
+        expected["ea_prefix"] = "SIMS4_EA_PREFIX_AUDIT_V2"
     if launcher_canary is not None:
         schemas["launcher_canary"] = launcher_canary.get("schema")
         expected["launcher_canary"] = "SIMS4_LAUNCHER_CANARY_RESULT_V1"
