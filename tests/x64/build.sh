@@ -1,36 +1,54 @@
 #!/bin/bash
 # Build a tiny x86_64 PE for testing FEX on iOS.
-# Usage: ./build.sh fib   (or any other .c file in this dir without extension)
-set -e
+# Usage: ./build.sh fib
+#        ./build.sh sims4-launcher-canary
+set -eu
 
 NAME="${1:-fib}"
-TOOLCHAIN="/Users/willfaust/Documents/ios-pc-game-claude/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
-APP_BUNDLE="/Users/willfaust/Documents/ios-pc-game-claude/app/Madeira/arm64ec-windows"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$DIR/../.." && pwd)"
+TOOLCHAIN="${TOOLCHAIN:-$REPO_ROOT/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin}"
+APP_BUNDLE="${APP_BUNDLE:-$REPO_ROOT/app/Madeira/arm64ec-windows}"
+CC="$TOOLCHAIN/x86_64-w64-mingw32-clang"
+OBJDUMP="$TOOLCHAIN/x86_64-w64-mingw32-objdump"
 
-cd "$(dirname "$0")"
+[ -f "$DIR/$NAME.c" ] || { echo "missing $DIR/$NAME.c" >&2; exit 2; }
+[ -x "$CC" ] || { echo "missing llvm-mingw x64 compiler: $CC" >&2; exit 2; }
+
+LIBS=(-lkernel32)
+case "$NAME" in
+    sims4-launcher-canary)
+        LIBS+=( -lole32 -loleaut32 -lws2_32 -lwinhttp -ladvapi32 )
+        ;;
+esac
+
+cd "$DIR"
 
 echo "=== building $NAME.exe (x86_64 PE) ==="
-"$TOOLCHAIN/x86_64-w64-mingw32-clang" \
-    -O2 -g \
-    -o "$NAME.exe" "$NAME.c" \
-    -lkernel32
+"$CC" -O2 -g -Wall -Wextra -o "$NAME.exe" "$NAME.c" "${LIBS[@]}"
 
 ls -la "$NAME.exe"
 
 echo ""
 echo "=== copying $NAME.exe to app bundle ==="
+mkdir -p "$APP_BUNDLE"
 cp "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
 ls -la "$APP_BUNDLE/$NAME.exe"
 
 echo ""
-echo "=== md5 ==="
-md5 "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
+echo "=== sha256 ==="
+if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
+else
+    sha256sum "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
+fi
 
 echo ""
 echo "=== entry/main symbols ==="
-"$TOOLCHAIN/../../llvm-mingw-20260421-ucrt-macos-universal/bin/x86_64-w64-mingw32-objdump" --syms "$NAME.exe" 2>&1 \
-    | grep -E "_main|main$|mainCRTStartup|WinMainCRTStartup" | head -5
+if [ -x "$OBJDUMP" ]; then
+    "$OBJDUMP" --syms "$NAME.exe" 2>&1 \
+        | grep -E "_main|main$|mainCRTStartup|WinMainCRTStartup" | head -5 || true
+fi
 
 echo ""
-echo "Done. Reminder: the iOS app picks the EXE based on the chosen target name."
-echo "If $NAME.exe isn't auto-loaded, update WineProcessBridge.m or the launcher."
+echo "Done. Add $NAME.exe as a Madeira library entry or select it in the developer launcher."
