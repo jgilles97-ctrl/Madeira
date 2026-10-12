@@ -18,8 +18,8 @@ OBJDUMP="$TOOLCHAIN/x86_64-w64-mingw32-objdump"
 LIBS=(-lkernel32)
 case "$NAME" in
     sims4-launcher-canary)
-        # uuid provides CLSID_NetworkListManager / IID_INetworkListManager.
-        LIBS+=( -lole32 -loleaut32 -luuid -lws2_32 -lwinhttp -ladvapi32 )
+        # uuid provides COM interface IIDs; dwrite proves Arial resolution before EA CEF.
+        LIBS+=( -lole32 -loleaut32 -luuid -ldwrite -lws2_32 -lwinhttp -ladvapi32 )
         ;;
 esac
 
@@ -50,8 +50,8 @@ echo "=== PE/import sanity ==="
 if [ -x "$OBJDUMP" ]; then
     "$OBJDUMP" -f "$NAME.exe" | head -12
     "$OBJDUMP" -p "$NAME.exe" 2>&1 \
-        | grep -E "DLL Name:|IsNetworkAlive|WinHttp|OpenSCManager|CoCreateInstance" \
-        | head -80 || true
+        | grep -E "DLL Name:|DWriteCreateFactory|IsNetworkAlive|WinHttp|OpenSCManager|CoCreateInstance" \
+        | head -100 || true
 fi
 
 echo ""
