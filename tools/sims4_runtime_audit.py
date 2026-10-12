@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Fingerprint and audit Madeira's staged ARM64EC Windows runtime for Sims/EA tests.
 
-The audit is deliberately conservative: launcher-risk modules are evidence targets,
-not assumed requirements. Missing risk modules do not fail the audit by themselves.
+The audit separates generic core modules from launcher coverage that has already
+been physically validated in upstream Madeira testing. "Validated" means the DLL
+was built/loaded and its Windows API worked on a device; it does NOT mean EA App
+specifically requires the DLL.
 """
 
 from __future__ import annotations
@@ -13,15 +15,20 @@ import json
 import pathlib
 from dataclasses import dataclass, asdict
 
-SCHEMA = "SIMS4_MADEIRA_RUNTIME_AUDIT_V1"
+SCHEMA = "SIMS4_MADEIRA_RUNTIME_AUDIT_V2"
 
-# These have appeared as missing/important in Madeira secondary-launcher work.
-# They are NOT asserted to be EA App requirements until a device/import log proves it.
-LAUNCHER_RISK_MODULES = (
+# Physically exercised in Madeira secondary-launcher/device work. These are safe
+# runtime-coverage candidates for the Sims/EA canary lane, but are not asserted
+# to be EA App requirements until our own canary/import evidence says so.
+VALIDATED_LAUNCHER_COVERAGE_MODULES = (
     "netprofm.dll",
     "sensapi.dll",
     "avifil32.dll",
     "msvfw32.dll",
+)
+
+# Generic network module already present in the ordinary Madeira runtime.
+NETWORK_SIGNAL_MODULES = (
     "winhttp.dll",
 )
 
@@ -85,25 +92,34 @@ def audit(root: pathlib.Path) -> dict[str, object]:
     records = collect_files(root)
     by_name = module_index(records)
 
-    def state(name: str, evidence_only: bool = False) -> dict[str, object]:
+    def state(name: str, *, evidence_class: str) -> dict[str, object]:
         rec = by_name.get(name.lower())
+        base: dict[str, object] = {
+            "evidence_class": evidence_class,
+            "ea_requirement": "UNPROVEN",
+        }
         if rec:
             return {
+                **base,
                 "status": "bundled",
                 "path": rec.relative_path,
                 "size": rec.size,
                 "sha256": rec.sha256,
-                "requires_device_import_evidence": False,
             }
         return {
+            **base,
             "status": "not_bundled",
             "path": None,
-            "requires_device_import_evidence": evidence_only,
         }
 
-    core = {name: state(name) for name in CORE_SIGNAL_MODULES}
-    risk = {name: state(name, True) for name in LAUNCHER_RISK_MODULES}
+    core = {name: state(name, evidence_class="core_runtime") for name in CORE_SIGNAL_MODULES}
+    network = {name: state(name, evidence_class="generic_network") for name in NETWORK_SIGNAL_MODULES}
+    validated = {
+        name: state(name, evidence_class="physically_validated_madeira_launcher_coverage")
+        for name in VALIDATED_LAUNCHER_COVERAGE_MODULES
+    }
     total_bytes = sum(r.size for r in records)
+    validated_present = sum(1 for item in validated.values() if item["status"] == "bundled")
 
     return {
         "schema": SCHEMA,
@@ -113,10 +129,14 @@ def audit(root: pathlib.Path) -> dict[str, object]:
         "total_bytes": total_bytes,
         "runtime_fingerprint_sha256": fingerprint(records),
         "core_signal_modules": core,
-        "launcher_risk_modules": risk,
-        "launcher_risk_policy": (
-            "Missing launcher-risk modules are NOT a failure. Build/add one only after "
-            "a device/import log or controlled canary proves it is needed."
+        "network_signal_modules": network,
+        "validated_launcher_coverage_modules": validated,
+        "validated_launcher_coverage_present": validated_present,
+        "validated_launcher_coverage_total": len(VALIDATED_LAUNCHER_COVERAGE_MODULES),
+        "launcher_coverage_policy": (
+            "The four validated coverage DLLs have worked in physical Madeira tests. "
+            "Their absence is an inventory gap for this diagnostic lane, not proof of an EA App requirement. "
+            "Use the Sims launcher canary/import logs to decide whether a missing DLL is causal."
         ),
         "device_claim": "UNPROVEN",
         "next_gate": "CAPTURE_EXACT_RUNTIME_FINGERPRINT_WITH_FIRST_EA_APP_DEVICE_LOG",
