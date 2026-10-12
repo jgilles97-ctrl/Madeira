@@ -22,7 +22,16 @@ AUDIT = load_module("sims4_ea_prefix_audit", "tools/sims4_ea_prefix_audit.py")
 
 
 class EAPrefixAuditTests(unittest.TestCase):
-    def build_prefix(self, root: pathlib.Path, *, service=True, nlm=True, background_ini=True):
+    def build_prefix(
+        self,
+        root: pathlib.Path,
+        *,
+        service=True,
+        nlm=True,
+        background_ini=True,
+        link2ea=True,
+        is_unavailable=0,
+    ):
         prefix = root / "prefix"
         drive_c = prefix / "drive_c"
         base = drive_c / "Program Files/Electronic Arts/EA Desktop/EA Desktop"
@@ -36,6 +45,13 @@ class EAPrefixAuditTests(unittest.TestCase):
         if nlm:
             system.append(r"[Software\\Classes\\CLSID\\{DCB00C01-570F-4A9B-8D69-199FDBA5723B}\\InprocServer32]")
             system.append(r'@="C:\\windows\\system32\\netprofm.dll"')
+        if link2ea:
+            system.append(r"[Software\\Classes\\link2ea]")
+            system.append(r'@="URL:link2ea Protocol"')
+        system.append(r"[Software\\Electronic Arts\\EA Desktop]")
+        if is_unavailable is not None:
+            system.append(f'"IsUnavailable"=dword:{int(is_unavailable):08x}')
+
         prefix.mkdir(parents=True, exist_ok=True)
         (prefix / "system.reg").write_text("\n".join(system), encoding="utf-8")
         (prefix / "user.reg").write_text("", encoding="utf-8")
@@ -49,10 +65,13 @@ class EAPrefixAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             prefix = self.build_prefix(pathlib.Path(td))
             report = AUDIT.audit(prefix)
+            self.assertEqual(report["schema"], "SIMS4_EA_PREFIX_AUDIT_V2")
             self.assertTrue(report["static_ready"])
             self.assertEqual(report["next_gate"], "RUN_SIM4_LAUNCHER_CANARY_ON_IPAD")
             self.assertTrue(report["registry"]["ea_background_service_registered"])
             self.assertTrue(report["registry"]["network_list_manager_registered"])
+            self.assertTrue(report["registry"]["link2ea_registered"])
+            self.assertEqual(report["registry"]["ea_desktop_is_unavailable"], 0)
             self.assertEqual(report["physical_device_success"], "UNPROVEN")
 
     def test_background_ini_is_not_declared_stale_from_static_presence(self):
@@ -80,6 +99,33 @@ class EAPrefixAuditTests(unittest.TestCase):
             report = AUDIT.audit(prefix)
             self.assertFalse(report["static_ready"])
             self.assertIn("EA_BACKGROUND_SERVICE_NOT_REGISTERED", report["blockers"])
+
+    def test_missing_link2ea_association_blocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.build_prefix(pathlib.Path(td), link2ea=False)
+            report = AUDIT.audit(prefix)
+            self.assertFalse(report["static_ready"])
+            self.assertFalse(report["registry"]["link2ea_registered"])
+            self.assertIn("LINK2EA_ASSOCIATION_MISSING", report["blockers"])
+
+    def test_is_unavailable_nonzero_blocks_without_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.build_prefix(pathlib.Path(td), is_unavailable=1)
+            system_path = prefix / "system.reg"
+            before = system_path.read_bytes()
+            report = AUDIT.audit(prefix)
+            after = system_path.read_bytes()
+            self.assertEqual(before, after)
+            self.assertFalse(report["static_ready"])
+            self.assertEqual(report["registry"]["ea_desktop_is_unavailable"], 1)
+            self.assertIn("EA_DESKTOP_ISUNAVAILABLE_SET", report["blockers"])
+
+    def test_missing_is_unavailable_value_is_reported_unknown_not_assumed_broken(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = self.build_prefix(pathlib.Path(td), is_unavailable=None)
+            report = AUDIT.audit(prefix)
+            self.assertIsNone(report["registry"]["ea_desktop_is_unavailable"])
+            self.assertNotIn("EA_DESKTOP_ISUNAVAILABLE_SET", report["blockers"])
 
 
 if __name__ == "__main__":
