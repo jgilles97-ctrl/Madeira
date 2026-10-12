@@ -18,19 +18,19 @@ FAILURE_GATES = {
     "child-process": "FIX_PSEUDO_PROCESS_HANDOFF",
     "service-control-manager": "FIX_WINDOWS_SERVICE_CONTROL_MANAGER",
     "ea-background-service": "FIX_EA_BACKGROUND_SERVICE_QUERY",
+    "dwrite-arial": "FIX_EA_CEF_ARIAL_FONT_RESOLUTION",
     "sensapi": "FIX_WINDOWS_NETWORK_STATE_APIS",
     "network-list-manager": "FIX_WINDOWS_NETWORK_STATE_APIS",
     "tcp-1.1.1.1-443": "FIX_IPAD_GUEST_NETWORK_ROUTE",
     "winhttp-https": "FIX_WINHTTP_HTTPS_PATH",
 }
 
-# Earlier entries are prerequisites for later entries. If several fail in one
-# run, work the earliest prerequisite first.
 PRIORITY = (
     "x64-process",
     "child-process",
     "service-control-manager",
     "ea-background-service",
+    "dwrite-arial",
     "sensapi",
     "network-list-manager",
     "tcp-1.1.1.1-443",
@@ -70,6 +70,14 @@ def parse(text: str) -> dict[str, Any]:
         None,
     )
 
+    arial_detail = checks.get("dwrite-arial", {}).get("detail", "")
+    arial_resolution = {
+        "passed": checks.get("dwrite-arial", {}).get("status") == "PASS",
+        "arial_found": bool(re.search(r"\barial=1\b", arial_detail)),
+        "liberation_sans_found": bool(re.search(r"\bliberation_sans=1\b", arial_detail)),
+        "tahoma_found": bool(re.search(r"\btahoma=1\b", arial_detail)),
+    }
+
     if failed:
         next_gate = FAILURE_GATES[failed[0]]
     elif missing:
@@ -94,6 +102,7 @@ def parse(text: str) -> dict[str, Any]:
         "observed_failures": observed_failures,
         "summary_consistent": summary_consistent,
         "ea_service_stopped_observed": stopped_observation is not None,
+        "dwrite_arial_resolution": arial_resolution,
         "next_gate": next_gate,
         "physical_device_success": "UNPROVEN",
         "rule": (
