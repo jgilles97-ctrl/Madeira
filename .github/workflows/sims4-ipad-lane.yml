@@ -7,6 +7,7 @@ on:
       - "tools/sims4_ipad_preflight.py"
       - "tools/sims4_ea_prefix_audit.py"
       - "tools/sims4_ea_cef_roles.py"
+      - "tools/sims4_launcher_canary_parse.py"
       - "tools/sims4_log_triage.py"
       - "tools/sims4_runtime_audit.py"
       - "tools/sims4_evidence_bundle.py"
@@ -21,6 +22,7 @@ on:
       - "tools/sims4_ipad_preflight.py"
       - "tools/sims4_ea_prefix_audit.py"
       - "tools/sims4_ea_cef_roles.py"
+      - "tools/sims4_launcher_canary_parse.py"
       - "tools/sims4_log_triage.py"
       - "tools/sims4_runtime_audit.py"
       - "tools/sims4_evidence_bundle.py"
@@ -51,6 +53,7 @@ jobs:
           tools/sims4_ipad_preflight.py
           tools/sims4_ea_prefix_audit.py
           tools/sims4_ea_cef_roles.py
+          tools/sims4_launcher_canary_parse.py
           tools/sims4_log_triage.py
           tools/sims4_runtime_audit.py
           tools/sims4_evidence_bundle.py
@@ -60,6 +63,7 @@ jobs:
           tests/test_sims4_ea_signatures.py
           tests/test_sims4_runtime_and_convergence.py
           tests/test_sims4_evidence_bundle.py
+          tests/test_sims4_launcher_canary_parse.py
           tests/test_sims4_launcher_coverage.py
       - name: Unit and convergence tests
         run: python -m unittest discover -s tests -p "test_sims4*.py" -v
