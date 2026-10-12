@@ -21,6 +21,11 @@ class LauncherCoverageTests(unittest.TestCase):
         required = (
             "CreateProcessA",
             "OpenSCManagerW",
+            "OpenServiceW",
+            "EABackgroundService",
+            "QueryServiceStatusEx",
+            "SERVICE_STOPPED",
+            "SERVICE_STOP_PENDING",
             "IsNetworkAlive",
             "CLSID_NetworkListManager",
             "connect(",
@@ -29,6 +34,12 @@ class LauncherCoverageTests(unittest.TestCase):
         )
         for symbol in required:
             self.assertIn(symbol, text)
+
+    def test_service_state_is_observed_without_blind_cleanup(self):
+        text = (ROOT / "tests/x64/sims4-launcher-canary.c").read_text(encoding="utf-8")
+        self.assertIn('observe("ea-service-stale-check"', text)
+        self.assertNotIn("DeleteFile", text)
+        self.assertNotIn("backgroundservice.ini", text)
 
     def test_canary_avoids_known_crashing_probe(self):
         text = (ROOT / "tests/x64/sims4-launcher-canary.c").read_text(encoding="utf-8")
@@ -43,7 +54,7 @@ class LauncherCoverageTests(unittest.TestCase):
         self.assertIn('REPO_ROOT="$(cd "$DIR/../.." && pwd)"', text)
         self.assertNotIn("/Users/willfaust/", text)
         self.assertIn("sims4-launcher-canary", text)
-        for lib in ("-lole32", "-lws2_32", "-lwinhttp", "-ladvapi32"):
+        for lib in ("-lole32", "-luuid", "-lws2_32", "-lwinhttp", "-ladvapi32"):
             self.assertIn(lib, text)
 
 
