@@ -6,6 +6,7 @@
 #include <winhttp.h>
 #include <objbase.h>
 #include <netlistmgr.h>
+#include <dwrite.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,16 +14,17 @@
 /*
  * Pre-EA-App canary for the Sims 4 iPad lane.
  *
- * It deliberately tests small Windows capabilities that launchers commonly
- * depend on before we spend a device run inside a large CEF launcher:
+ * Tests small Windows capabilities before spending a device run inside EA CEF:
  *   - x64/FEX process execution
- *   - child process creation + lifetime
- *   - Service Control Manager reachability
- *   - EABackgroundService registration/query + exact state
- *   - sensapi!IsNetworkAlive
- *   - Network List Manager COM (netprofm.dll)
- *   - Winsock TCP
- *   - WinHTTP HTTPS
+ *   - child pseudo-process creation + lifetime
+ *   - Service Control Manager and EABackgroundService state
+ *   - DirectWrite system font collection and Arial resolution
+ *   - sensapi / Network List Manager
+ *   - raw TCP and WinHTTP HTTPS
+ *
+ * The DirectWrite Arial probe is intentional: a 2026 Wine bug reports current
+ * EA Desktop EACefSubProcess crashing when Arial cannot be resolved. Staging's
+ * missing-fonts patch avoids that class by providing an Arial-compatible font.
  *
  * It does NOT call InternetCheckConnectionW: Madeira issue #189 reports that
  * call can trigger an unrecoverable host fault on the affected baseline.
@@ -37,7 +39,6 @@ static void result(const char *name, int ok, const char *detail)
     if (!ok) failures++;
 }
 
-/* Observation-only line: records state without deciding that the state itself is fatal. */
 static void observe(const char *name, const char *detail)
 {
     printf("CANARY %-24s OBSERVE %s\n", name, detail ? detail : "");
@@ -93,6 +94,51 @@ static void test_child_process(const char *self)
     }
 }
 
+static int dwrite_find_family(IDWriteFontCollection *collection, const WCHAR *name, UINT32 *index)
+{
+    BOOL exists = FALSE;
+    HRESULT hr = IDWriteFontCollection_FindFamilyName(collection, name, index, &exists);
+    return SUCCEEDED(hr) && exists;
+}
+
+static void test_dwrite_arial(void)
+{
+    IDWriteFactory *factory = NULL;
+    IDWriteFontCollection *collection = NULL;
+    HRESULT hr;
+    UINT32 arial_index = 0, liberation_index = 0, tahoma_index = 0;
+    int arial = 0, liberation = 0, tahoma = 0;
+    char detail[320];
+
+    hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IID_IDWriteFactory, (IUnknown **)&factory);
+    if (FAILED(hr) || !factory) {
+        snprintf(detail, sizeof(detail), "DWriteCreateFactory hr=0x%08lx", (unsigned long)hr);
+        result("dwrite-arial", 0, detail);
+        return;
+    }
+
+    hr = IDWriteFactory_GetSystemFontCollection(factory, &collection, FALSE);
+    if (FAILED(hr) || !collection) {
+        snprintf(detail, sizeof(detail), "GetSystemFontCollection hr=0x%08lx", (unsigned long)hr);
+        result("dwrite-arial", 0, detail);
+        IDWriteFactory_Release(factory);
+        return;
+    }
+
+    arial = dwrite_find_family(collection, L"Arial", &arial_index);
+    liberation = dwrite_find_family(collection, L"Liberation Sans", &liberation_index);
+    tahoma = dwrite_find_family(collection, L"Tahoma", &tahoma_index);
+    snprintf(detail, sizeof(detail),
+             "arial=%d arial_index=%u liberation_sans=%d liberation_index=%u tahoma=%d tahoma_index=%u",
+             arial, (unsigned)arial_index,
+             liberation, (unsigned)liberation_index,
+             tahoma, (unsigned)tahoma_index);
+    result("dwrite-arial", arial, detail);
+
+    IDWriteFontCollection_Release(collection);
+    IDWriteFactory_Release(factory);
+}
+
 typedef BOOL (WINAPI *IsNetworkAliveFn)(LPDWORD);
 
 static void test_sensapi(void)
@@ -137,8 +183,7 @@ static void test_network_list_manager(void)
     }
 
     hr = INetworkListManager_get_IsConnectedToInternet(nlm, &connected);
-    if (SUCCEEDED(hr))
-        hr = INetworkListManager_GetConnectivity(nlm, &connectivity);
+    if (SUCCEEDED(hr)) hr = INetworkListManager_GetConnectivity(nlm, &connectivity);
     {
         char detail[192];
         snprintf(detail, sizeof(detail), "hr=0x%08lx internet=%d connectivity=0x%x",
@@ -268,6 +313,7 @@ int main(int argc, char **argv)
     else failures++;
 
     test_services();
+    test_dwrite_arial();
     test_sensapi();
     test_network_list_manager();
     test_tcp();
