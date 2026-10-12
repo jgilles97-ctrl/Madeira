@@ -111,7 +111,8 @@ jobs:
           test -x toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/arm64ec-w64-mingw32-clang
           test -x toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/x86_64-w64-mingw32-clang
 
-      - name: Build validated ARM64EC launcher coverage
+      - name: Build validated ARM64EC launcher coverage modules
+        id: modules
         shell: bash
         run: |
           set -euo pipefail
@@ -119,39 +120,54 @@ jobs:
           DEST="$PWD/out/arm64ec-windows" JOBS=4 \
             bash build/wine-pe/build-modules.sh \
               avifil32 msvfw32 netprofm sensapi
-          APP_BUNDLE="$PWD/out/arm64ec-windows" \
-            bash tests/x64/build.sh sims4-launcher-canary
+          for f in avifil32.dll msvfw32.dll netprofm.dll sensapi.dll; do
+            test -s "out/arm64ec-windows/$f"
+          done
+          shasum -a 256 \
+            out/arm64ec-windows/avifil32.dll \
+            out/arm64ec-windows/msvfw32.dll \
+            out/arm64ec-windows/netprofm.dll \
+            out/arm64ec-windows/sensapi.dll \
+            | sort > out/SHA256SUMS.modules
+          cat out/SHA256SUMS.modules
 
-      - name: Verify and fingerprint outputs
+      - name: Build x64 Sims launcher canary
+        id: canary
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          for f in \
-            avifil32.dll \
-            msvfw32.dll \
-            netprofm.dll \
-            sensapi.dll \
-            sims4-launcher-canary.exe
-          do
-            test -s "out/arm64ec-windows/$f"
-          done
+          APP_BUNDLE="$PWD/out/arm64ec-windows" \
+            bash tests/x64/build.sh sims4-launcher-canary
+
+      - name: Verify and fingerprint complete outputs
+        if: steps.canary.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s out/arm64ec-windows/sims4-launcher-canary.exe
           shasum -a 256 out/arm64ec-windows/* | sort > out/SHA256SUMS
           python3 tools/sims4_runtime_audit.py out/arm64ec-windows \
             --json out/sims4-launcher-runtime-audit.json
           cat out/SHA256SUMS
           cat out/sims4-launcher-runtime-audit.json
 
-      - name: Upload cloud-built launcher coverage
+      - name: Upload preserved cloud build outputs
+        if: always() && steps.modules.outcome == 'success'
         uses: actions/upload-artifact@v5
         with:
           name: sims4-arm64ec-launcher-coverage-${{ github.sha }}
           path: |
-            out/arm64ec-windows/avifil32.dll
-            out/arm64ec-windows/msvfw32.dll
-            out/arm64ec-windows/netprofm.dll
-            out/arm64ec-windows/sensapi.dll
-            out/arm64ec-windows/sims4-launcher-canary.exe
+            out/arm64ec-windows/*
+            out/SHA256SUMS.modules
             out/SHA256SUMS
             out/sims4-launcher-runtime-audit.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Fail job if canary compilation failed
+        if: steps.canary.outcome != 'success'
+        shell: bash
+        run: |
+          echo "ARM64EC DLL outputs were preserved, but the x64 canary did not compile."
+          exit 1
