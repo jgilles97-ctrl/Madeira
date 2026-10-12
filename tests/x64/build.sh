@@ -18,14 +18,16 @@ OBJDUMP="$TOOLCHAIN/x86_64-w64-mingw32-objdump"
 LIBS=(-lkernel32)
 case "$NAME" in
     sims4-launcher-canary)
-        LIBS+=( -lole32 -loleaut32 -lws2_32 -lwinhttp -ladvapi32 )
+        # uuid provides CLSID_NetworkListManager / IID_INetworkListManager.
+        LIBS+=( -lole32 -loleaut32 -luuid -lws2_32 -lwinhttp -ladvapi32 )
         ;;
 esac
 
 cd "$DIR"
 
 echo "=== building $NAME.exe (x86_64 PE) ==="
-"$CC" -O2 -g -Wall -Wextra -o "$NAME.exe" "$NAME.c" "${LIBS[@]}"
+"$CC" -O2 -g -Wall -Wextra -Werror=implicit-function-declaration \
+    -o "$NAME.exe" "$NAME.c" "${LIBS[@]}"
 
 ls -la "$NAME.exe"
 
@@ -41,6 +43,15 @@ if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
 else
     sha256sum "$NAME.exe" "$APP_BUNDLE/$NAME.exe"
+fi
+
+echo ""
+echo "=== PE/import sanity ==="
+if [ -x "$OBJDUMP" ]; then
+    "$OBJDUMP" -f "$NAME.exe" | head -12
+    "$OBJDUMP" -p "$NAME.exe" 2>&1 \
+        | grep -E "DLL Name:|IsNetworkAlive|WinHttp|OpenSCManager|CoCreateInstance" \
+        | head -80 || true
 fi
 
 echo ""
