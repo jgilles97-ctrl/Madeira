@@ -35,6 +35,10 @@ on:
       - "docs/SIMS4_IPAD_LOCAL.md"
       - ".github/workflows/sims4-ipad-lane.yml"
 
+concurrency:
+  group: sims4-ipad-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
