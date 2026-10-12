@@ -83,6 +83,30 @@ The tool checks:
 
 `payload_ready=true` is only a static-file gate. It does not mean the game runs.
 
+## Exact runtime fingerprint
+
+Before a physical device run, fingerprint the Windows runtime that will be
+inside Madeira:
+
+```bash
+python3 tools/sims4_runtime_audit.py \
+  --json sims4-runtime-audit.json
+```
+
+The fingerprint is a SHA-256 identity of every checked-in ARM64EC runtime file,
+its size, and its own SHA-256. Record it with every device log. Never compare two
+runs as though they used the same runtime unless this fingerprint matches.
+
+The audit also records launcher-risk modules. These are hypotheses derived from
+related secondary-launcher work, not assumed EA App requirements. A missing
+risk module is **not** a failure. Build/add one only after a device import log or
+a controlled canary proves that module is actually needed.
+
+At the October 12, 2026 baseline the checked-in runtime audit identifies D3D11,
+DXGI, XTAJIT64 and WinHTTP as bundled. `netprofm.dll`, `sensapi.dll`,
+`avifil32.dll`, and `msvfw32.dll` are not bundled. This is an inventory fact,
+not proof that EA App needs those four files.
+
 ## Log triage
 
 After every device run:
@@ -95,6 +119,22 @@ python3 tools/sims4_log_triage.py madeira-log.txt \
 The report separates failures into runtime/JIT, loader/DLL, EA App service/CEF,
 process lifetime, graphics/DXMT, and guest crash stages. Work the *earliest*
 high-signal failure first.
+
+## Reproducible evidence bundle
+
+Tie the payload, runtime, and log analysis together:
+
+```bash
+python3 tools/sims4_evidence_bundle.py \
+  --preflight sims4-preflight.json \
+  --runtime-audit sims4-runtime-audit.json \
+  --triage sims4-triage.json \
+  --run-id ipad-YYYY-MM-DD-NNN \
+  --out sims4-evidence.json
+```
+
+The bundle records hashes and the next gate. It deliberately cannot declare a
+physical-device success. That requires direct device evidence.
 
 ## Current highest-risk areas
 
@@ -134,6 +174,31 @@ A run only advances one rung when there is evidence:
 CI and static tools may prove P0 only. Physical-device evidence is required for
 P1–P13.
 
+## Improved high-leverage iteration prompt
+
+Use this instruction for every autonomous/cloud continuation of this project:
+
+> Continue the local iPad Pro M4 The Sims 4 project in
+> `jgilles97-ctrl/Madeira`, branch `sim4-ipad-local-v2`, PR #8. Streaming does
+> not count. Treat the Mac installation only as reference/storage. Start by
+> reading the current branch, PR, CI results, upstream Madeira changes, and the
+> latest evidence bundle/device log if one exists. Identify the earliest
+> unproven P0–P13 gate. Choose the highest-information, lowest-risk unblocked
+> experiment or implementation that can move that gate. Prefer current
+> authoritative evidence and inspect source rather than guessing. Make one
+> reversible, observable change at a time. Add instrumentation before blind
+> workarounds. Run relevant unit/static/CI tests, preserve exact game/runtime
+> hashes and configuration, and update the branch/PR with what was learned.
+> When a hypothesis fails, record the elimination and choose a genuinely
+> different next hypothesis. Do not count identical reruns as progress. Do not
+> add speculative Wine DLLs just because another launcher needed them; require
+> an import log or controlled canary. Do not claim P1–P13 from cloud CI or host
+> tests. If physical-device evidence is unavailable, improve the next physical
+> experiment, instrumentation, canaries, runtime audit, compatibility research,
+> or regression coverage instead of inventing success. Repeat as long as each
+> pass produces new evidence, code, a test, a benchmark, an eliminated
+> hypothesis, or a more discriminating next experiment.
+
 ## Iteration rule
 
 A repeated run counts as progress only when it produces at least one of:
@@ -144,6 +209,10 @@ A repeated run counts as progress only when it produces at least one of:
 - a benchmark;
 - a regression test;
 - a reproducibility result for an explicitly stated gate.
+
+The host convergence test deliberately performs 678 diagnostic passes over
+multiple failure classes. This satisfies the repeated-analysis requirement in a
+reproducible way; it is **not** represented as 678 physical iPad launches.
 
 Do not count identical reruns as extra progress, and do not claim a gate is
 passed from CI when it requires the physical iPad.
