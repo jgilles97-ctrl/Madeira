@@ -17,11 +17,12 @@
  * depend on before we spend a device run inside a large CEF launcher:
  *   - x64/FEX process execution
  *   - child process creation + lifetime
+ *   - Service Control Manager reachability
+ *   - EABackgroundService registration/query + exact state
  *   - sensapi!IsNetworkAlive
  *   - Network List Manager COM (netprofm.dll)
  *   - Winsock TCP
  *   - WinHTTP HTTPS
- *   - Service Control Manager reachability
  *
  * It does NOT call InternetCheckConnectionW: Madeira issue #189 reports that
  * call can trigger an unrecoverable host fault on the affected baseline.
@@ -34,6 +35,27 @@ static void result(const char *name, int ok, const char *detail)
     printf("CANARY %-24s %s %s\n", name, ok ? "PASS" : "FAIL", detail ? detail : "");
     fflush(stdout);
     if (!ok) failures++;
+}
+
+/* Observation-only line: records state without deciding that the state itself is fatal. */
+static void observe(const char *name, const char *detail)
+{
+    printf("CANARY %-24s OBSERVE %s\n", name, detail ? detail : "");
+    fflush(stdout);
+}
+
+static const char *service_state_name(DWORD state)
+{
+    switch (state) {
+        case SERVICE_STOPPED: return "STOPPED";
+        case SERVICE_START_PENDING: return "START_PENDING";
+        case SERVICE_STOP_PENDING: return "STOP_PENDING";
+        case SERVICE_RUNNING: return "RUNNING";
+        case SERVICE_CONTINUE_PENDING: return "CONTINUE_PENDING";
+        case SERVICE_PAUSE_PENDING: return "PAUSE_PENDING";
+        case SERVICE_PAUSED: return "PAUSED";
+        default: return "UNKNOWN";
+    }
 }
 
 static int child_mode(void)
@@ -188,16 +210,49 @@ done:
     if (session) WinHttpCloseHandle(session);
 }
 
-static void test_scm(void)
+static void test_services(void)
 {
     SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    SC_HANDLE svc = NULL;
+    SERVICE_STATUS_PROCESS status;
+    DWORD needed = 0;
+    char detail[256];
+
     if (!scm) {
-        char detail[128];
         snprintf(detail, sizeof(detail), "OpenSCManager error=%lu", (unsigned long)GetLastError());
         result("service-control-manager", 0, detail);
         return;
     }
     result("service-control-manager", 1, "open");
+
+    svc = OpenServiceW(scm, L"EABackgroundService", SERVICE_QUERY_STATUS);
+    if (!svc) {
+        snprintf(detail, sizeof(detail), "OpenService error=%lu", (unsigned long)GetLastError());
+        result("ea-background-service", 0, detail);
+        CloseServiceHandle(scm);
+        return;
+    }
+
+    memset(&status, 0, sizeof(status));
+    if (!QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, (LPBYTE)&status,
+                              (DWORD)sizeof(status), &needed)) {
+        snprintf(detail, sizeof(detail), "QueryServiceStatusEx error=%lu needed=%lu",
+                 (unsigned long)GetLastError(), (unsigned long)needed);
+        result("ea-background-service", 0, detail);
+    } else {
+        snprintf(detail, sizeof(detail),
+                 "query=ok state=%lu state_name=%s pid=%lu exit=%lu service_exit=%lu",
+                 (unsigned long)status.dwCurrentState,
+                 service_state_name(status.dwCurrentState),
+                 (unsigned long)status.dwProcessId,
+                 (unsigned long)status.dwWin32ExitCode,
+                 (unsigned long)status.dwServiceSpecificExitCode);
+        result("ea-background-service", 1, detail);
+        if (status.dwCurrentState == SERVICE_STOPPED || status.dwCurrentState == SERVICE_STOP_PENDING)
+            observe("ea-service-stale-check", detail);
+    }
+
+    CloseServiceHandle(svc);
     CloseServiceHandle(scm);
 }
 
@@ -212,7 +267,7 @@ int main(int argc, char **argv)
     if (n > 0 && n < sizeof(self)) test_child_process(self);
     else failures++;
 
-    test_scm();
+    test_services();
     test_sensapi();
     test_network_list_manager();
     test_tcp();
