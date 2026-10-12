@@ -6,6 +6,7 @@ on:
       - "tools/sims4_ipad_preflight.py"
       - "tools/sims4_log_triage.py"
       - "tools/sims4_runtime_audit.py"
+      - "tools/sims4_evidence_bundle.py"
       - "tests/test_sims4*.py"
       - "docs/SIMS4_IPAD_LOCAL.md"
       - ".github/workflows/sims4-ipad-lane.yml"
@@ -14,6 +15,7 @@ on:
       - "tools/sims4_ipad_preflight.py"
       - "tools/sims4_log_triage.py"
       - "tools/sims4_runtime_audit.py"
+      - "tools/sims4_evidence_bundle.py"
       - "tests/test_sims4*.py"
       - "docs/SIMS4_IPAD_LOCAL.md"
       - ".github/workflows/sims4-ipad-lane.yml"
@@ -38,8 +40,10 @@ jobs:
           tools/sims4_ipad_preflight.py
           tools/sims4_log_triage.py
           tools/sims4_runtime_audit.py
+          tools/sims4_evidence_bundle.py
           tests/test_sims4_ipad_tools.py
           tests/test_sims4_runtime_and_convergence.py
+          tests/test_sims4_evidence_bundle.py
       - name: Unit and convergence tests
         run: python -m unittest discover -s tests -p "test_sims4*.py" -v
       - name: Audit checked-in ARM64EC runtime
