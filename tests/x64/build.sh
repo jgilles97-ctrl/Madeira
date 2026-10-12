@@ -16,18 +16,22 @@ OBJDUMP="$TOOLCHAIN/x86_64-w64-mingw32-objdump"
 [ -x "$CC" ] || { echo "missing llvm-mingw x64 compiler: $CC" >&2; exit 2; }
 
 LIBS=(-lkernel32)
+CFLAGS=(-O2 -g -Wall -Wextra -Werror=implicit-function-declaration)
 case "$NAME" in
     sims4-launcher-canary)
         # uuid provides COM interface IIDs; dwrite proves Arial resolution before EA CEF.
         LIBS+=( -lole32 -loleaut32 -luuid -ldwrite -lws2_32 -lwinhttp -ladvapi32 )
+        # llvm-mingw's current netlistmgr.idl exposes IsConnectedToInternet as the
+        # C helper name, while Microsoft's generated SDK header uses get_IsConnectedToInternet.
+        # Keep the source readable against the Microsoft API name and adapt only this toolchain.
+        CFLAGS+=( -DINetworkListManager_get_IsConnectedToInternet=INetworkListManager_IsConnectedToInternet )
         ;;
 esac
 
 cd "$DIR"
 
 echo "=== building $NAME.exe (x86_64 PE) ==="
-"$CC" -O2 -g -Wall -Wextra -Werror=implicit-function-declaration \
-    -o "$NAME.exe" "$NAME.c" "${LIBS[@]}"
+"$CC" "${CFLAGS[@]}" -o "$NAME.exe" "$NAME.c" "${LIBS[@]}"
 
 ls -la "$NAME.exe"
 
