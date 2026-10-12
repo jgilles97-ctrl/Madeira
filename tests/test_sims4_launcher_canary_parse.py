@@ -24,6 +24,7 @@ CANARY x64-process              PASS C:\\canary.exe
 CANARY child-process            PASS exit=42 expected=42
 CANARY service-control-manager  PASS open
 CANARY ea-background-service    PASS query=ok state=4 state_name=RUNNING pid=100 exit=0 service_exit=0
+CANARY dwrite-arial             PASS arial=1 arial_index=42 liberation_sans=1 liberation_index=19 tahoma=1 tahoma_index=77
 CANARY sensapi                  PASS alive=1 flags=0x1
 CANARY network-list-manager     PASS hr=0x00000000 internet=1 connectivity=0x240
 CANARY tcp-1.1.1.1-443          PASS connect=ok wsa=0
@@ -39,15 +40,29 @@ class LauncherCanaryParseTests(unittest.TestCase):
         self.assertEqual(report["failed_checks"], [])
         self.assertEqual(report["missing_checks"], [])
         self.assertTrue(report["summary_consistent"])
+        self.assertTrue(report["dwrite_arial_resolution"]["arial_found"])
+        self.assertTrue(report["dwrite_arial_resolution"]["liberation_sans_found"])
+        self.assertTrue(report["dwrite_arial_resolution"]["tahoma_found"])
         self.assertEqual(report["physical_device_success"], "UNPROVEN")
+
+    def test_missing_arial_routes_to_cef_font_gate(self):
+        text = PASS_ALL.replace(
+            "CANARY dwrite-arial             PASS arial=1 arial_index=42 liberation_sans=1 liberation_index=19 tahoma=1 tahoma_index=77",
+            "CANARY dwrite-arial             FAIL arial=0 arial_index=0 liberation_sans=1 liberation_index=19 tahoma=1 tahoma_index=77",
+        ).replace("failures=0", "failures=1")
+        report = PARSE.parse(text)
+        self.assertEqual(report["next_gate"], "FIX_EA_CEF_ARIAL_FONT_RESOLUTION")
+        self.assertFalse(report["dwrite_arial_resolution"]["arial_found"])
+        self.assertTrue(report["dwrite_arial_resolution"]["liberation_sans_found"])
+        self.assertTrue(report["summary_consistent"])
 
     def test_stopped_ea_service_routes_to_ini_capture_without_treating_query_as_failure(self):
         text = PASS_ALL.replace(
             "state=4 state_name=RUNNING pid=100",
             "state=1 state_name=STOPPED pid=0",
         ).replace(
-            "CANARY sensapi",
-            "CANARY ea-service-stale-check OBSERVE query=ok state=1 state_name=STOPPED pid=0\nCANARY sensapi",
+            "CANARY dwrite-arial",
+            "CANARY ea-service-stale-check OBSERVE query=ok state=1 state_name=STOPPED pid=0\nCANARY dwrite-arial",
         )
         report = PARSE.parse(text)
         self.assertEqual(report["failed_checks"], [])
@@ -65,6 +80,7 @@ class LauncherCanaryParseTests(unittest.TestCase):
 
     def test_missing_output_is_not_silently_passed(self):
         report = PARSE.parse("CANARY x64-process PASS ok\nCANARY SUMMARY failures=0\n")
+        self.assertIn("dwrite-arial", report["missing_checks"])
         self.assertIn("winhttp-https", report["missing_checks"])
         self.assertEqual(report["next_gate"], "REPEAT_LAUNCHER_CANARY_WITH_COMPLETE_OUTPUT")
 
@@ -78,6 +94,7 @@ class LauncherCanaryParseTests(unittest.TestCase):
             (PASS_ALL, "LAUNCH_EA_APP_IN_WINE_DESKTOP"),
             (PASS_ALL.replace("CANARY x64-process              PASS", "CANARY x64-process              FAIL").replace("failures=0", "failures=1"), "FIX_X64_FEX_RUNTIME"),
             (PASS_ALL.replace("CANARY child-process            PASS", "CANARY child-process            FAIL").replace("failures=0", "failures=1"), "FIX_PSEUDO_PROCESS_HANDOFF"),
+            (PASS_ALL.replace("CANARY dwrite-arial             PASS", "CANARY dwrite-arial             FAIL").replace("failures=0", "failures=1"), "FIX_EA_CEF_ARIAL_FONT_RESOLUTION"),
             (PASS_ALL.replace("CANARY sensapi                  PASS", "CANARY sensapi                  FAIL").replace("failures=0", "failures=1"), "FIX_WINDOWS_NETWORK_STATE_APIS"),
             (PASS_ALL.replace("CANARY tcp-1.1.1.1-443          PASS", "CANARY tcp-1.1.1.1-443          FAIL").replace("failures=0", "failures=1"), "FIX_IPAD_GUEST_NETWORK_ROUTE"),
             (PASS_ALL.replace("CANARY winhttp-https            PASS", "CANARY winhttp-https            FAIL").replace("failures=0", "failures=1"), "FIX_WINHTTP_HTTPS_PATH"),
