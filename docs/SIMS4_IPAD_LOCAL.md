@@ -75,6 +75,11 @@ secondary-launcher testing. That is stronger evidence than a guess, but it is
 still **not proof EA App requires each DLL**. The branch builds them as launcher
 coverage and lets the canary/import logs decide causality.
 
+The cloud macOS lane has also now demonstrated that all four modules build from
+the exact pinned Madeira Wine submodule and pinned llvm-mingw toolchain. The
+workflow preserves these expensive outputs even if a later canary compilation
+step fails, so one downstream failure no longer discards useful build evidence.
+
 ### A2 — small x64 launcher canary
 
 The branch provides `tests/x64/sims4-launcher-canary.c`. The cloud macOS job
@@ -86,10 +91,16 @@ On iPad it checks, in dependency order:
 2. child-process/pseudo-process handoff;
 3. Service Control Manager access;
 4. `EABackgroundService` registration/query, exact state and PID;
-5. `sensapi!IsNetworkAlive`;
-6. `INetworkListManager` through `netprofm.dll`;
-7. raw TCP to 1.1.1.1:443;
-8. WinHTTP HTTPS.
+5. DirectWrite system-font enumeration and whether `Arial` resolves, while also
+   recording `Liberation Sans` and `Tahoma` availability;
+6. `sensapi!IsNetworkAlive`;
+7. `INetworkListManager` through `netprofm.dll`;
+8. raw TCP to 1.1.1.1:443;
+9. WinHTTP HTTPS.
+
+The DirectWrite probe covers a current EA/Wine failure class where
+`EACefSubProcess.exe` can fail when Arial is unavailable. Do not preemptively
+install or alias fonts; prove the condition first.
 
 It deliberately does **not** call `InternetCheckConnectionW`; upstream Madeira
 physical testing found that probe unsafe on the affected baseline.
@@ -104,6 +115,20 @@ python3 tools/sims4_launcher_canary_parse.py launcher-canary.log \
 The parser works the earliest failed prerequisite first. A fully passing canary
 only advances to `LAUNCH_EA_APP_IN_WINE_DESKTOP`; it does not claim EA App or
 The Sims 4 works.
+
+If and only if the parsed device result proves `Arial` is missing, generate a
+non-mutating remediation plan:
+
+```bash
+python3 tools/sims4_font_remediation.py sims4-launcher-canary.json \
+  --json sims4-font-plan.json
+```
+
+The planner refuses to act on missing/stale evidence. When Arial is absent and
+Liberation Sans is actually visible, it can propose the Wine-native
+`HKCU\Software\Wine\Fonts\Replacements` alias plus a rollback command. Re-run
+the identical DirectWrite canary after any manually applied change and require
+`arial=1` before EA App is tested.
 
 Networking must be tested after Madeira performs its normal JIT/VPN handoff.
 Do not manually tear down the JIT VPN early: upstream device evidence shows raw
@@ -182,21 +207,25 @@ python3 tools/sims4_log_triage.py madeira-log.txt \
 Always work the earliest high-signal failure first. Later errors are frequently
 secondary noise.
 
-## Reproducible evidence bundle
+## Reproducible evidence bundle v2
 
 ```bash
 python3 tools/sims4_evidence_bundle.py \
   --preflight sims4-preflight.json \
   --runtime-audit sims4-runtime-audit.json \
   --ea-prefix-audit sims4-ea-prefix.json \
+  --launcher-canary sims4-launcher-canary.json \
+  --cef-roles sims4-ea-cef-roles.json \
   --triage sims4-triage.json \
   --run-id ipad-YYYY-MM-DD-NNN \
   --out sims4-evidence.json
 ```
 
-The bundle binds game/runtime/EA component hashes, EA background-service state
-file identity, findings and next gate. Static blockers outrank stale device
-logs. The bundle can never promote physical-device success by itself.
+The v2 bundle hashes and binds the game/runtime/EA-prefix/canary/CEF evidence.
+Static blockers outrank the launcher canary, and a failed or incomplete launcher
+canary outranks later EA/TS4 logs. This prevents stale evidence from accidentally
+advancing the project. The bundle never promotes physical-device success by
+itself.
 
 ## Acceptance ladder
 
@@ -220,40 +249,46 @@ CI/static tools cannot prove P1–P13. Physical-device evidence is required.
 ## Current high-risk areas
 
 1. EA App service/RPC/update compatibility.
-2. CEF helper behavior inside Madeira's one-Mach-task pseudo-process model.
-3. Guest networking after the JIT VPN handoff, especially Windows connectivity
+2. DirectWrite/font-family resolution before EA CEF startup.
+3. CEF helper behavior inside Madeira's one-Mach-task pseudo-process model.
+4. Guest networking after the JIT VPN handoff, especially Windows connectivity
    APIs vs raw TCP/WinHTTP.
-4. iPad memory pressure once EA CEF and TS4 coexist.
-5. D3D11/DXMT compatibility at TS4 initialization.
-6. Full-DLC storage and memory cost after base-game repeatability.
+5. iPad memory pressure once EA CEF and TS4 coexist.
+6. D3D11/DXMT compatibility at TS4 initialization.
+7. Full-DLC storage and memory cost after base-game repeatability.
 
-## Improved high-leverage iteration prompt — v4
+## Improved high-leverage iteration prompt — v5
 
 > Continue `jgilles97-ctrl/Madeira`, branch `sim4-ipad-local-v2`, PR #8 toward
 > P13: The Sims 4 running fully locally on the iPad Pro M4. Streaming never
-> counts. The Mac installation is reference/storage only. At the start of each
-> pass inspect the current branch head, PR, newest CI jobs/artifacts, upstream
-> Madeira/Wine/Proton changes, latest static game preflight, EA-prefix audit,
-> exact runtime fingerprint, launcher-canary result, CEF-role report and newest
-> physical-device evidence if available. Identify the earliest unproven gate.
-> Rank candidate work by information gained × reversibility ÷ physical-device
-> cost. Prefer small canaries that distinguish multiple hypotheses before large
-> EA/Sims launches. For EA use this order unless evidence disproves it: static
-> prefix → exact runtime → x64 launcher canary → service state/network APIs → EA
-> Wine-desktop launch → CEF role classification → TS4 → rendering/gameplay.
-> Preserve exact hashes/configuration and one-change-per-run. Treat the four
-> upstream-validated ARM64EC launcher DLLs as tested runtime coverage, not
-> assumed EA requirements. Never delete `backgroundservice.ini` unless the EA
-> service is proven STOPPED/STOP_PENDING and the file is captured first. Never
-> use `InternetCheckConnectionW` on the affected Madeira baseline. Do not kill
-> or skip a Chromium helper based only on `EACefSubProcess.exe`; classify its
-> role and require causal device evidence. Exhaust source inspection, offline
-> disassembly, host tests and cloud builds before spending a physical iPad run.
-> When a hypothesis fails, record that elimination and move to a genuinely
-> different discriminator. Every repeated pass must add evidence, code, a test,
-> a benchmark, a runtime artifact, or an eliminated hypothesis. Never claim a
-> physical gate from host/CI evidence and never convert repeated regression
-> passes into fictional device launches.
+> counts. The Mac installation is reference/storage only. At every pass read
+> the current branch head, PR, latest completed and queued CI jobs, preserved
+> cloud artifacts, upstream Madeira/Wine/Proton changes, static game preflight,
+> EA-prefix audit, exact runtime fingerprint, launcher-canary result, CEF-role
+> report and newest physical-device evidence. Identify the earliest unproven
+> gate and reject stale evidence whose hashes/schema no longer match. Rank
+> candidate work by information gained × reversibility ÷ physical-device cost.
+> Prefer a small canary that separates several hypotheses over a large EA/Sims
+> launch. For EA follow this dependency order unless direct evidence disproves
+> it: static prefix → exact runtime → x64/FEX/process/service canary → DirectWrite
+> Arial resolution → Windows network-state APIs/raw TCP/WinHTTP → EA Wine-desktop
+> launch → CEF helper-role classification → TS4 → DX11 rendering → gameplay.
+> Treat the four upstream-validated ARM64EC launcher DLLs as tested runtime
+> coverage, not assumed EA requirements. Preserve successful expensive cloud
+> outputs even if a later build/test step fails. Never delete
+> `backgroundservice.ini` unless the EA service is proven STOPPED/STOP_PENDING
+> and the file is captured first. Never apply a font alias unless the same
+> device canary proves Arial missing and the replacement family present; require
+> the identical canary to pass after the reversible change. Never use
+> `InternetCheckConnectionW` on the affected Madeira baseline. Never block an EA
+> Chromium helper by executable name alone; classify its CEF role and require
+> causal device evidence. Exhaust source inspection, offline/static analysis,
+> host tests and cloud builds before spending a physical iPad run. When a
+> hypothesis fails, record the elimination and move to a genuinely different
+> discriminator. Every repeated pass must add evidence, code, a regression,
+> benchmark, preserved artifact, eliminated hypothesis or more discriminating
+> experiment. Never claim a physical gate from cloud/host evidence and never
+> represent deterministic test iterations as iPad launches.
 
 ## Repeated-analysis coverage
 
@@ -262,11 +297,12 @@ The branch contains independent deterministic stress suites for:
 - 678 generic Sims/Madeira diagnostic decisions;
 - 678 EA-specific launcher failure decisions;
 - 678 EA CEF helper-role decisions;
-- 678 launcher-canary decision passes.
+- 678 launcher-canary decision passes;
+- 678 evidence-gated Arial remediation decisions.
 
-That is 2,712 diagnostic decisions per Python version. The main CI tests three
-Python versions, so a complete green matrix exercises 8,136 deterministic
-iterations. These are regression/decision passes, **not** 8,136 iPad launches.
+That is 3,390 diagnostic decisions per Python version. The main CI tests three
+Python versions, so a complete green matrix exercises **10,170 deterministic
+iterations**. These are regression/decision passes, **not** 10,170 iPad launches.
 
 ## Iteration rule
 
@@ -277,7 +313,7 @@ A repeated run counts as progress only when it produces at least one of:
 - an eliminated hypothesis;
 - a benchmark;
 - a regression test;
-- a new cloud build artifact;
+- a new/preserved cloud build artifact;
 - a more discriminating next experiment.
 
 Do not count identical reruns as extra progress.
