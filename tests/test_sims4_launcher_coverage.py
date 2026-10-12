@@ -26,6 +26,11 @@ class LauncherCoverageTests(unittest.TestCase):
             "QueryServiceStatusEx",
             "SERVICE_STOPPED",
             "SERVICE_STOP_PENDING",
+            "DWriteCreateFactory",
+            "IDWriteFactory_GetSystemFontCollection",
+            "IDWriteFontCollection_FindFamilyName",
+            'L"Arial"',
+            'L"Liberation Sans"',
             "IsNetworkAlive",
             "CLSID_NetworkListManager",
             "connect(",
@@ -49,12 +54,12 @@ class LauncherCoverageTests(unittest.TestCase):
         )
         self.assertNotRegex(code_only, r"\bInternetCheckConnection[AW]?\s*\(")
 
-    def test_x64_builder_is_repo_relative(self):
+    def test_x64_builder_is_repo_relative_and_links_dwrite(self):
         text = (ROOT / "tests/x64/build.sh").read_text(encoding="utf-8")
         self.assertIn('REPO_ROOT="$(cd "$DIR/../.." && pwd)"', text)
         self.assertNotIn("/Users/willfaust/", text)
         self.assertIn("sims4-launcher-canary", text)
-        for lib in ("-lole32", "-luuid", "-lws2_32", "-lwinhttp", "-ladvapi32"):
+        for lib in ("-lole32", "-luuid", "-ldwrite", "-lws2_32", "-lwinhttp", "-ladvapi32"):
             self.assertIn(lib, text)
 
 
