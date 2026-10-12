@@ -5,14 +5,16 @@ on:
     paths:
       - "tools/sims4_ipad_preflight.py"
       - "tools/sims4_log_triage.py"
-      - "tests/test_sims4_ipad_tools.py"
+      - "tools/sims4_runtime_audit.py"
+      - "tests/test_sims4*.py"
       - "docs/SIMS4_IPAD_LOCAL.md"
       - ".github/workflows/sims4-ipad-lane.yml"
   pull_request:
     paths:
       - "tools/sims4_ipad_preflight.py"
       - "tools/sims4_log_triage.py"
-      - "tests/test_sims4_ipad_tools.py"
+      - "tools/sims4_runtime_audit.py"
+      - "tests/test_sims4*.py"
       - "docs/SIMS4_IPAD_LOCAL.md"
       - ".github/workflows/sims4-ipad-lane.yml"
 
@@ -31,6 +33,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile
-        run: python -m py_compile tools/sims4_ipad_preflight.py tools/sims4_log_triage.py tests/test_sims4_ipad_tools.py
-      - name: Unit tests
-        run: python -m unittest discover -s tests -p "test_sims4_ipad_tools.py" -v
+        run: >-
+          python -m py_compile
+          tools/sims4_ipad_preflight.py
+          tools/sims4_log_triage.py
+          tools/sims4_runtime_audit.py
+          tests/test_sims4_ipad_tools.py
+          tests/test_sims4_runtime_and_convergence.py
+      - name: Unit and convergence tests
+        run: python -m unittest discover -s tests -p "test_sims4*.py" -v
+      - name: Audit checked-in ARM64EC runtime
+        run: python tools/sims4_runtime_audit.py --json sims4-runtime-audit.json
