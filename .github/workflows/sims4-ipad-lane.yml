@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "tools/sims4_ipad_preflight.py"
+      - "tools/sims4_ea_prefix_audit.py"
       - "tools/sims4_log_triage.py"
       - "tools/sims4_runtime_audit.py"
       - "tools/sims4_evidence_bundle.py"
@@ -17,6 +18,7 @@ on:
   pull_request:
     paths:
       - "tools/sims4_ipad_preflight.py"
+      - "tools/sims4_ea_prefix_audit.py"
       - "tools/sims4_log_triage.py"
       - "tools/sims4_runtime_audit.py"
       - "tools/sims4_evidence_bundle.py"
@@ -45,10 +47,13 @@ jobs:
         run: >-
           python -m py_compile
           tools/sims4_ipad_preflight.py
+          tools/sims4_ea_prefix_audit.py
           tools/sims4_log_triage.py
           tools/sims4_runtime_audit.py
           tools/sims4_evidence_bundle.py
           tests/test_sims4_ipad_tools.py
+          tests/test_sims4_ea_prefix_audit.py
+          tests/test_sims4_ea_signatures.py
           tests/test_sims4_runtime_and_convergence.py
           tests/test_sims4_evidence_bundle.py
           tests/test_sims4_launcher_coverage.py
