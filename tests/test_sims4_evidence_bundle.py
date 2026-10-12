@@ -48,7 +48,7 @@ class EvidenceBundleTests(unittest.TestCase):
 
     def ea_fixture(self, *, ready=True):
         return {
-            "schema": "SIMS4_EA_PREFIX_AUDIT_V1",
+            "schema": "SIMS4_EA_PREFIX_AUDIT_V2",
             "static_ready": ready,
             "next_gate": "RUN_SIM4_LAUNCHER_CANARY_ON_IPAD" if ready else "FIX_EA_PREFIX_STATIC_BLOCKERS",
             "components": {
@@ -220,7 +220,7 @@ class EvidenceBundleTests(unittest.TestCase):
     def test_ea_schema_mismatch_is_blocking(self):
         preflight, runtime, triage = self.fixtures()
         ea = self.ea_fixture()
-        ea["schema"] = "OLD_EA_AUDIT"
+        ea["schema"] = "SIMS4_EA_PREFIX_AUDIT_V1"
         result = BUNDLE.make_bundle(preflight, runtime, triage, run_id="ipad-002b", ea_prefix=ea)
         self.assertIn("INPUT_SCHEMA_MISMATCH", result["bundle_blockers"])
 
