@@ -31,8 +31,10 @@ class EvidenceBundleTests(unittest.TestCase):
                 "next_gate": "EA_APP_DEVICE_QUALIFICATION",
             },
             {
-                "schema": "SIMS4_MADEIRA_RUNTIME_AUDIT_V1",
+                "schema": "SIMS4_MADEIRA_RUNTIME_AUDIT_V2",
                 "runtime_fingerprint_sha256": "runtimehash",
+                "validated_launcher_coverage_present": 4,
+                "validated_launcher_coverage_total": 4,
                 "next_gate": "CAPTURE_EXACT_RUNTIME_FINGERPRINT_WITH_FIRST_EA_APP_DEVICE_LOG",
             },
             {
@@ -64,6 +66,8 @@ class EvidenceBundleTests(unittest.TestCase):
         self.assertTrue(result["input_schema_ok"])
         self.assertEqual(result["game_executable_sha256"], "gamehash")
         self.assertEqual(result["runtime_fingerprint_sha256"], "runtimehash")
+        self.assertEqual(result["runtime_validated_launcher_coverage_present"], 4)
+        self.assertEqual(result["runtime_validated_launcher_coverage_total"], 4)
         self.assertFalse(result["ea_prefix_included"])
         self.assertEqual(result["next_gate"], "CAPTURE_EA_APP_TO_TS4_PROCESS_START")
         self.assertEqual(result["physical_device_success"], "UNPROVEN")
@@ -98,6 +102,12 @@ class EvidenceBundleTests(unittest.TestCase):
         preflight, runtime, triage = self.fixtures()
         triage["schema"] = "OLD_TRIAGE"
         result = BUNDLE.make_bundle(preflight, runtime, triage, run_id="ipad-002")
+        self.assertIn("INPUT_SCHEMA_MISMATCH", result["bundle_blockers"])
+
+    def test_runtime_v1_is_rejected_so_old_audits_cannot_mix_with_v2(self):
+        preflight, runtime, triage = self.fixtures()
+        runtime["schema"] = "SIMS4_MADEIRA_RUNTIME_AUDIT_V1"
+        result = BUNDLE.make_bundle(preflight, runtime, triage, run_id="ipad-old-runtime")
         self.assertIn("INPUT_SCHEMA_MISMATCH", result["bundle_blockers"])
 
     def test_ea_schema_mismatch_is_blocking(self):
