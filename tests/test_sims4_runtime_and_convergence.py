@@ -29,7 +29,6 @@ class RuntimeAuditTests(unittest.TestCase):
             (root / "B.DLL").write_bytes(b"beta")
             (root / "a.dll").write_bytes(b"alpha")
             first = AUDIT.audit(root)["runtime_fingerprint_sha256"]
-            # Recreate in the opposite order with identical contents.
             for child in root.iterdir():
                 child.unlink()
             (root / "a.dll").write_bytes(b"alpha")
@@ -47,15 +46,29 @@ class RuntimeAuditTests(unittest.TestCase):
             second = AUDIT.audit(root)["runtime_fingerprint_sha256"]
             self.assertNotEqual(first, second)
 
-    def test_launcher_risk_modules_are_evidence_targets_not_failures(self):
+    def test_validated_launcher_coverage_is_inventory_not_ea_requirement(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
             report = AUDIT.audit(root)
+            self.assertEqual(report["schema"], "SIMS4_MADEIRA_RUNTIME_AUDIT_V2")
             self.assertTrue(report["runtime_exists"])
-            for item in report["launcher_risk_modules"].values():
+            self.assertEqual(report["validated_launcher_coverage_present"], 0)
+            self.assertEqual(report["validated_launcher_coverage_total"], 4)
+            for item in report["validated_launcher_coverage_modules"].values():
                 self.assertEqual(item["status"], "not_bundled")
-                self.assertTrue(item["requires_device_import_evidence"])
+                self.assertEqual(item["evidence_class"], "physically_validated_madeira_launcher_coverage")
+                self.assertEqual(item["ea_requirement"], "UNPROVEN")
             self.assertEqual(report["device_claim"], "UNPROVEN")
+
+    def test_validated_coverage_counter_tracks_bundled_modules(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "netprofm.dll").write_bytes(b"netprofm")
+            (root / "sensapi.dll").write_bytes(b"sensapi")
+            report = AUDIT.audit(root)
+            self.assertEqual(report["validated_launcher_coverage_present"], 2)
+            self.assertEqual(report["validated_launcher_coverage_modules"]["netprofm.dll"]["status"], "bundled")
+            self.assertEqual(report["validated_launcher_coverage_modules"]["sensapi.dll"]["status"], "bundled")
 
 
 class ConvergenceStressTests(unittest.TestCase):
@@ -75,7 +88,6 @@ class ConvergenceStressTests(unittest.TestCase):
         counts: dict[str, int] = {}
         for iteration in range(678):
             text, expected_gate = self.CASES[iteration % len(self.CASES)]
-            # Unique harmless noise prevents accidentally testing one identical byte string 678 times.
             report = TRIAGE.classify(f"iteration={iteration}\n{text}")
             self.assertEqual(report["schema"], "SIMS4_MADEIRA_TRIAGE_V1")
             self.assertEqual(report["next_gate"], expected_gate, f"iteration {iteration}")
