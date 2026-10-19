@@ -17,6 +17,18 @@ from typing import Iterable
 
 SCHEMA = "MADEIRA_LOG_TRIAGE_V1"
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "INFO": 3}
+CORRELATION_WINDOW = 12
+
+ACCESS_VIOLATION_PATTERN = re.compile(r"(?:0x)?c0000005", re.I)
+FOREIGN_MAPPING_PATTERN = re.compile(
+    r"(?:wine\s+doesn['\u2019]t\s+own\s+this\s+addr|fex\s*/\s*foreign\s+mmap|foreign\s+mmap)",
+    re.I,
+)
+GUEST_RIP_PATTERN = re.compile(r"(?:guest\s+)?rip\s*[:=]\s*(0x[0-9a-f]+)", re.I)
+FAULT_ADDRESS_PATTERN = re.compile(
+    r"(?:fault(?:\s+addr(?:ess)?)?|access(?:\s+addr(?:ess)?)?)\s*[:=]\s*(0x[0-9a-f]+)",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +61,18 @@ RULES: tuple[Rule, ...] = (
         "Windows process reported STATUS_ACCESS_VIOLATION (0xC0000005)",
         re.compile(r"(?:0x)?c0000005", re.I),
         "Include the first access-violation line and nearby module/PC lines in the upstream report.",
+    ),
+    Rule(
+        "unity_text_rendering_failure",
+        "HIGH",
+        "Unity reported a high-signal text, font-atlas, or shader failure",
+        re.compile(
+            r"(?:TextMeshPro|TMP_FontAsset|failed\s+to\s+create\s+font\s+texture|"
+            r"Hidden/InternalErrorShader|(?:missing|fallback)\s+font\s+asset|"
+            r"glyph\s+atlas.{0,40}(?:fail|error)|shader.{0,80}not\s+supported)",
+            re.I,
+        ),
+        "Preserve the exact Unity build and renderer identity, then attach the first matching font/shader line with nearby resource-load errors.",
     ),
     Rule(
         "windows_out_of_memory",
@@ -123,6 +147,50 @@ def _samples(matches: Iterable[tuple[int, str]], limit: int = 3) -> list[dict[st
     return out
 
 
+def _first_value(lines: list[str], pattern: re.Pattern[str]) -> str | None:
+    for line in lines:
+        match = pattern.search(line)
+        if match:
+            return match.group(1).lower()
+    return None
+
+
+def _access_violation_correlations(lines: list[str]) -> list[dict[str, object]]:
+    """Correlate a crash with nearby foreign-map evidence without claiming causality."""
+    correlations: list[dict[str, object]] = []
+    for index, line in enumerate(lines):
+        if not ACCESS_VIOLATION_PATTERN.search(line):
+            continue
+
+        start = max(0, index - CORRELATION_WINDOW)
+        end = min(len(lines), index + CORRELATION_WINDOW + 1)
+        window = lines[start:end]
+        foreign_offsets = [i for i, item in enumerate(window) if FOREIGN_MAPPING_PATTERN.search(item)]
+        if not foreign_offsets:
+            continue
+
+        correlations.append(
+            {
+                "code": "foreign_mapping_access_violation",
+                "severity": "CRITICAL",
+                "title": "Access violation occurred near a FEX/Wine foreign-mapping boundary",
+                "access_violation_line": index + 1,
+                "foreign_mapping_lines": [start + offset + 1 for offset in foreign_offsets],
+                "guest_rip": _first_value(window, GUEST_RIP_PATTERN),
+                "fault_address": _first_value(window, FAULT_ADDRESS_PATTERN),
+                "context": [
+                    {"line": line_no, "text": redact_line(lines[line_no - 1])}
+                    for line_no in range(start + 1, end + 1)
+                ],
+                "guidance": (
+                    "Preserve the exact Madeira build, JIT, FEX, Wine, and game identities; map the guest RIP "
+                    "and fault address to a loaded module before assigning root cause. Do not treat the Start input as causal."
+                ),
+            }
+        )
+    return correlations
+
+
 def triage_text(text: str) -> dict[str, object]:
     lines = text.splitlines()
     findings: list[dict[str, object]] = []
@@ -149,6 +217,19 @@ def triage_text(text: str) -> dict[str, object]:
                 {"code": code, "title": title, "count": len(hits), "samples": _samples(hits)}
             )
 
+    correlations = _access_violation_correlations(lines)
+    for correlation in correlations:
+        findings.append(
+            {
+                "code": correlation["code"],
+                "severity": correlation["severity"],
+                "title": correlation["title"],
+                "count": 1,
+                "samples": correlation["context"],
+                "guidance": correlation["guidance"],
+            }
+        )
+
     findings.sort(key=lambda f: (SEVERITY_ORDER[str(f["severity"])], str(f["code"])))
     severity_counts = {sev: 0 for sev in SEVERITY_ORDER}
     for finding in findings:
@@ -160,10 +241,12 @@ def triage_text(text: str) -> dict[str, object]:
         "finding_count": len(findings),
         "severity_counts": severity_counts,
         "findings": findings,
+        "crash_correlations": correlations,
         "positive_signals": positive_signals,
         "notes": [
             "Heuristic summary only: a matching line is evidence to inspect, not proof of root cause.",
             "The tool is offline/read-only and redacts common local paths and secret-like values from samples.",
+            f"Foreign-mapping correlations require evidence within {CORRELATION_WINDOW} lines of an access violation.",
         ],
     }
 
@@ -208,6 +291,19 @@ def render_text(report: dict[str, object], source: pathlib.Path) -> str:
         for item in positives:
             assert isinstance(item, dict)
             lines.append(f"- {item['title']} (`{item['code']}`): {item['count']} match(es)")
+        lines.append("")
+
+    correlations = report.get("crash_correlations", [])
+    if isinstance(correlations, list) and correlations:
+        lines += ["## Crash correlations"]
+        for item in correlations:
+            if not isinstance(item, dict):
+                continue
+            rip = item.get("guest_rip") or "not found"
+            fault = item.get("fault_address") or "not found"
+            lines.append(
+                f"- `{item['code']}` at L{item['access_violation_line']}: guest RIP `{rip}`, fault address `{fault}`"
+            )
         lines.append("")
 
     lines += [

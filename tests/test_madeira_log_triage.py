@@ -70,5 +70,61 @@ class MadeiraLogTriageTests(unittest.TestCase):
         self.assertEqual(report["line_count"], 2)
 
 
+    def test_foreign_mapping_access_violation_is_correlated(self):
+        report = mod.triage_text(
+            "\n".join(
+                [
+                    "guest RIP=0x71fc88cc85",
+                    "process terminated with c0000005",
+                    "Wine doesn't own this addr (FEX/foreign mmap)",
+                    "fault=0x785623f160",
+                ]
+            )
+        )
+        correlations = report["crash_correlations"]
+        self.assertEqual(len(correlations), 1)
+        self.assertEqual(correlations[0]["guest_rip"], "0x71fc88cc85")
+        self.assertEqual(correlations[0]["fault_address"], "0x785623f160")
+        codes = {f["code"] for f in report["findings"]}
+        self.assertIn("windows_access_violation", codes)
+        self.assertIn("foreign_mapping_access_violation", codes)
+
+    def test_curly_apostrophe_foreign_mapping_boundary_is_matched(self):
+        report = mod.triage_text("c0000005\nWine doesn’t own this addr\n")
+        self.assertEqual(len(report["crash_correlations"]), 1)
+
+    def test_isolated_or_distant_access_violation_is_not_correlated(self):
+        isolated = mod.triage_text("c0000005\nordinary line\n")
+        self.assertEqual(isolated["crash_correlations"], [])
+
+        distant = mod.triage_text("c0000005\n" + "\n".join(["ordinary"] * 13) + "\nforeign mmap\n")
+        self.assertEqual(distant["crash_correlations"], [])
+
+    def test_unity_text_failures_are_narrowly_classified(self):
+        report = mod.triage_text(
+            "TMP_FontAsset missing fallback font asset\n"
+            "Shader Hidden/InternalErrorShader is not supported\n"
+        )
+        finding = next(f for f in report["findings"] if f["code"] == "unity_text_rendering_failure")
+        self.assertEqual(finding["count"], 2)
+
+        ordinary = mod.triage_text("UI text is invisible after pressing Start\n")
+        self.assertNotIn(
+            "unity_text_rendering_failure", {f["code"] for f in ordinary["findings"]}
+        )
+
+    def test_correlated_context_is_redacted(self):
+        report = mod.triage_text(
+            "guest RIP=0x1 path=/Users/joey/private token=topsecret\n"
+            "c0000005\n"
+            "Wine doesn't own this addr\n"
+            "fault=0x2\n"
+        )
+        context = "\n".join(item["text"] for item in report["crash_correlations"][0]["context"])
+        self.assertNotIn("/Users/joey", context)
+        self.assertNotIn("topsecret", context)
+        self.assertIn("[REDACTED]", context)
+
+
 if __name__ == "__main__":
     unittest.main()
