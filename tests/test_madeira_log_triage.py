@@ -126,7 +126,7 @@ class MadeiraLogTriageTests(unittest.TestCase):
         self.assertIn("[REDACTED]", context)
 
     def test_zero_violation_counter_is_a_success_not_a_crash(self):
-        report = mod.triage_text("cube-x64 clean; 0 c0000005\\nWine doesn't own this addr\\n")
+        report = mod.triage_text("cube-x64 clean; 0 c0000005\nWine doesn't own this addr\n")
         codes = {f["code"] for f in report["findings"]}
         self.assertNotIn("windows_access_violation", codes)
         self.assertNotIn("foreign_mapping_access_violation", codes)
@@ -135,8 +135,8 @@ class MadeiraLogTriageTests(unittest.TestCase):
 
     def test_zero_counter_with_separate_crash_token_remains_failure(self):
         report = mod.triage_text(
-            "0 c0000005; process terminated with 0xC0000005\\n"
-            "Wine doesn't own this addr (FEX/foreign mmap)\\n"
+            "0 c0000005; process terminated with 0xC0000005\n"
+            "Wine doesn't own this addr (FEX/foreign mmap)\n"
         )
         codes = {f["code"] for f in report["findings"]}
         self.assertIn("windows_access_violation", codes)
@@ -144,20 +144,20 @@ class MadeiraLogTriageTests(unittest.TestCase):
         self.assertEqual(len(report["crash_correlations"]), 1)
 
     def test_bounded_crash_marker_does_not_match_embedded_hex(self):
-        report = mod.triage_text("identifier abcC0000005xyz\\n0xC000000500\\n")
+        report = mod.triage_text("identifier abcC0000005xyz\n0xC000000500\n")
         self.assertNotIn(
             "windows_access_violation", {f["code"] for f in report["findings"]}
         )
 
     def test_multiple_zero_counters_do_not_generate_crash(self):
-        report = mod.triage_text("0 c0000005 0 0xc0000005\\nforeign mmap\\n")
+        report = mod.triage_text("0 c0000005 0 0xc0000005\nforeign mmap\n")
         self.assertNotIn(
             "windows_access_violation", {f["code"] for f in report["findings"]}
         )
         self.assertEqual(report["crash_correlations"], [])
 
     def test_real_access_violation_with_zero_count_on_prior_line(self):
-        report = mod.triage_text("0 c0000005\\ncrash status=c0000005\\nforeign mmap\\n")
+        report = mod.triage_text("0 c0000005\ncrash status=c0000005\nforeign mmap\n")
         self.assertEqual(
             sum(f["code"] == "windows_access_violation" for f in report["findings"]), 1
         )
