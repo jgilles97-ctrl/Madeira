@@ -19,7 +19,10 @@ SCHEMA = "MADEIRA_LOG_TRIAGE_V1"
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "INFO": 3}
 CORRELATION_WINDOW = 12
 
-ACCESS_VIOLATION_PATTERN = re.compile(r"(?:0x)?c0000005", re.I)
+ACCESS_VIOLATION_PATTERN = re.compile(r"(?<![0-9A-Za-z])(?:0x)?c0000005(?![0-9A-Za-z])", re.I)
+ZERO_COUNT_ACCESS_VIOLATION_PATTERN = re.compile(
+    r"(?<![0-9A-Za-z])0\s+(?:0x)?c0000005(?![0-9A-Za-z])", re.I
+)
 FOREIGN_MAPPING_PATTERN = re.compile(
     r"(?:wine\s+doesn['\u2019]t\s+own\s+this\s+addr|fex\s*/\s*foreign\s+mmap|foreign\s+mmap)",
     re.I,
@@ -29,6 +32,18 @@ FAULT_ADDRESS_PATTERN = re.compile(
     r"(?:fault(?:\s+addr(?:ess)?)?|access(?:\s+addr(?:ess)?)?)\s*[:=]\s*(0x[0-9a-f]+)",
     re.I,
 )
+
+
+
+def _has_access_violation(line: str) -> bool:
+    """Exclude zero-count diagnostics without hiding another real crash on the line.
+
+    A successful x64 smoke sometimes prints '0 c0000005'. That is a count,
+    not STATUS_ACCESS_VIOLATION evidence. Keep distinct real exception tokens.
+    """
+    tokens = len(ACCESS_VIOLATION_PATTERN.findall(line))
+    zero_counts = len(ZERO_COUNT_ACCESS_VIOLATION_PATTERN.findall(line))
+    return tokens > zero_counts
 
 
 @dataclass(frozen=True)
@@ -159,7 +174,7 @@ def _access_violation_correlations(lines: list[str]) -> list[dict[str, object]]:
     """Correlate a crash with nearby foreign-map evidence without claiming causality."""
     correlations: list[dict[str, object]] = []
     for index, line in enumerate(lines):
-        if not ACCESS_VIOLATION_PATTERN.search(line):
+        if not _has_access_violation(line):
             continue
 
         start = max(0, index - CORRELATION_WINDOW)
@@ -196,7 +211,11 @@ def triage_text(text: str) -> dict[str, object]:
     findings: list[dict[str, object]] = []
 
     for rule in RULES:
-        hits = [(i, line) for i, line in enumerate(lines, start=1) if rule.pattern.search(line)]
+        hits = [
+            (i, line) for i, line in enumerate(lines, start=1)
+            if rule.pattern.search(line)
+            and (rule.code != "windows_access_violation" or _has_access_violation(line))
+        ]
         if hits:
             findings.append(
                 {
